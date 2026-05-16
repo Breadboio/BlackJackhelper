@@ -6,11 +6,17 @@
     <!-- Collapsed FAB Button (always visible) -->
     <LinearLayout
         android:id="@+id/fab_toggle"
-        android:layout_width="56dp"
-        android:layout_height="56dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="56dp"
+        android:minHeight="56dp"
         android:layout_gravity="end|top"
         android:gravity="center"
         android:orientation="vertical"
+        android:paddingStart="8dp"
+        android:paddingEnd="8dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="6dp"
         android:background="@drawable/fab_background"
         android:backgroundTint="#1A1A2E"
         android:elevation="8dp">
@@ -21,6 +27,18 @@
             android:layout_height="wrap_content"
             android:text="🃏"
             android:textSize="24sp" />
+
+        <!-- Live math readout shown when cards are detected (auto-detect or after manual taps). -->
+        <TextView
+            android:id="@+id/fab_math"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:textColor="#FFFFFF"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:visibility="gone" />
     </LinearLayout>
 
     <!-- Expanded Panel -->
@@ -118,127 +136,152 @@
                 android:layout_marginTop="4dp"
                 android:text="📡 Scanning…"
                 android:textColor="#6C9EBF"
-                android:textSize="11sp"
+                android:textSize="10sp"
                 android:gravity="center"
+                android:maxLines="3"
+                android:ellipsize="end"
+                android:fontFamily="monospace"
                 android:visibility="gone" />
+
+            <Button
+                android:id="@+id/btn_calibrate"
+                android:layout_width="match_parent"
+                android:layout_height="32dp"
+                android:layout_marginTop="6dp"
+                android:text="📐 Calibrate Scan Area"
+                android:textSize="11sp"
+                android:backgroundTint="#2C3E50"
+                android:textColor="#6C9EBF" />
         </LinearLayout>
 
-        <!-- Your Cards Section -->
-        <TextView
+        <!-- Player Card Section (full container — hidden in auto-detect mode) -->
+        <LinearLayout
             android:id="@+id/manual_card_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="12dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="4dp"
-            android:text="YOUR CARDS"
-            android:textColor="#6C9EBF"
-            android:textSize="10sp"
-            android:letterSpacing="0.15"
-            android:textStyle="bold" />
+            android:orientation="vertical">
 
-        <!-- Player Card Row 1: A 2 3 4 5 -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="4dp"
-            android:orientation="horizontal">
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="12dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp"
+                android:text="YOUR CARDS"
+                android:textColor="#6C9EBF"
+                android:textSize="10sp"
+                android:letterSpacing="0.15"
+                android:textStyle="bold" />
 
-            <Button android:id="@+id/btn_ace"
-                style="@style/CardButton" android:text="A" android:backgroundTint="#8E44AD"/>
-            <Button android:id="@+id/btn_2"
-                style="@style/CardButton" android:text="2"/>
-            <Button android:id="@+id/btn_3"
-                style="@style/CardButton" android:text="3"/>
-            <Button android:id="@+id/btn_4"
-                style="@style/CardButton" android:text="4"/>
-            <Button android:id="@+id/btn_5"
-                style="@style/CardButton" android:text="5"/>
+            <!-- Player Card Row 1: A 2 3 4 5 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp"
+                android:orientation="horizontal">
+
+                <Button android:id="@+id/btn_ace"
+                    style="@style/CardButton" android:text="A" android:backgroundTint="#8E44AD"/>
+                <Button android:id="@+id/btn_2"
+                    style="@style/CardButton" android:text="2"/>
+                <Button android:id="@+id/btn_3"
+                    style="@style/CardButton" android:text="3"/>
+                <Button android:id="@+id/btn_4"
+                    style="@style/CardButton" android:text="4"/>
+                <Button android:id="@+id/btn_5"
+                    style="@style/CardButton" android:text="5"/>
+            </LinearLayout>
+
+            <!-- Player Card Row 2: 6 7 8 9 10 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="8dp"
+                android:orientation="horizontal">
+
+                <Button android:id="@+id/btn_6"
+                    style="@style/CardButton" android:text="6"/>
+                <Button android:id="@+id/btn_7"
+                    style="@style/CardButton" android:text="7"/>
+                <Button android:id="@+id/btn_8"
+                    style="@style/CardButton" android:text="8"/>
+                <Button android:id="@+id/btn_9"
+                    style="@style/CardButton" android:text="9"/>
+                <Button android:id="@+id/btn_10"
+                    style="@style/CardButton" android:text="10" android:textSize="10sp"/>
+            </LinearLayout>
         </LinearLayout>
 
-        <!-- Player Card Row 2: 6 7 8 9 10 -->
+        <!-- Dealer Card Section (full container — hidden in auto-detect mode) -->
         <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="8dp"
-            android:orientation="horizontal">
-
-            <Button android:id="@+id/btn_6"
-                style="@style/CardButton" android:text="6"/>
-            <Button android:id="@+id/btn_7"
-                style="@style/CardButton" android:text="7"/>
-            <Button android:id="@+id/btn_8"
-                style="@style/CardButton" android:text="8"/>
-            <Button android:id="@+id/btn_9"
-                style="@style/CardButton" android:text="9"/>
-            <Button android:id="@+id/btn_10"
-                style="@style/CardButton" android:text="10" android:textSize="10sp"/>
-        </LinearLayout>
-
-        <!-- Dealer Card Section -->
-        <TextView
             android:id="@+id/manual_dealer_section"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="12dp"
-            android:paddingTop="8dp"
-            android:paddingBottom="4dp"
-            android:text="DEALER UPCARD"
-            android:textColor="#BF9E6C"
-            android:textSize="10sp"
-            android:letterSpacing="0.15"
-            android:textStyle="bold" />
+            android:orientation="vertical">
 
-        <!-- Dealer Card Row 1: A 2 3 4 5 -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="4dp"
-            android:orientation="horizontal">
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="12dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="4dp"
+                android:text="DEALER UPCARD"
+                android:textColor="#BF9E6C"
+                android:textSize="10sp"
+                android:letterSpacing="0.15"
+                android:textStyle="bold" />
 
-            <Button android:id="@+id/dealer_ace"
-                style="@style/DealerCardButton" android:text="A" android:backgroundTint="#8E44AD"/>
-            <Button android:id="@+id/dealer_2"
-                style="@style/DealerCardButton" android:text="2"/>
-            <Button android:id="@+id/dealer_3"
-                style="@style/DealerCardButton" android:text="3"/>
-            <Button android:id="@+id/dealer_4"
-                style="@style/DealerCardButton" android:text="4"/>
-            <Button android:id="@+id/dealer_5"
-                style="@style/DealerCardButton" android:text="5"/>
-        </LinearLayout>
+            <!-- Dealer Card Row 1: A 2 3 4 5 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="4dp"
+                android:orientation="horizontal">
 
-        <!-- Dealer Card Row 2: 6 7 8 9 10 -->
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:background="#0E0E1A"
-            android:paddingStart="8dp"
-            android:paddingEnd="8dp"
-            android:paddingBottom="8dp"
-            android:orientation="horizontal">
+                <Button android:id="@+id/dealer_ace"
+                    style="@style/DealerCardButton" android:text="A" android:backgroundTint="#8E44AD"/>
+                <Button android:id="@+id/dealer_2"
+                    style="@style/DealerCardButton" android:text="2"/>
+                <Button android:id="@+id/dealer_3"
+                    style="@style/DealerCardButton" android:text="3"/>
+                <Button android:id="@+id/dealer_4"
+                    style="@style/DealerCardButton" android:text="4"/>
+                <Button android:id="@+id/dealer_5"
+                    style="@style/DealerCardButton" android:text="5"/>
+            </LinearLayout>
 
-            <Button android:id="@+id/dealer_6"
-                style="@style/DealerCardButton" android:text="6"/>
-            <Button android:id="@+id/dealer_7"
-                style="@style/DealerCardButton" android:text="7"/>
-            <Button android:id="@+id/dealer_8"
-                style="@style/DealerCardButton" android:text="8"/>
-            <Button android:id="@+id/dealer_9"
-                style="@style/DealerCardButton" android:text="9"/>
-            <Button android:id="@+id/dealer_10"
-                style="@style/DealerCardButton" android:text="10" android:textSize="10sp"/>
+            <!-- Dealer Card Row 2: 6 7 8 9 10 -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:background="#0E0E1A"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingBottom="8dp"
+                android:orientation="horizontal">
+
+                <Button android:id="@+id/dealer_6"
+                    style="@style/DealerCardButton" android:text="6"/>
+                <Button android:id="@+id/dealer_7"
+                    style="@style/DealerCardButton" android:text="7"/>
+                <Button android:id="@+id/dealer_8"
+                    style="@style/DealerCardButton" android:text="8"/>
+                <Button android:id="@+id/dealer_9"
+                    style="@style/DealerCardButton" android:text="9"/>
+                <Button android:id="@+id/dealer_10"
+                    style="@style/DealerCardButton" android:text="10" android:textSize="10sp"/>
+            </LinearLayout>
         </LinearLayout>
 
         <!-- Action Buttons -->

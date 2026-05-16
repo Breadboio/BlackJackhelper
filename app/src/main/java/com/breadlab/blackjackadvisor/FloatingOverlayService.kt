@@ -18,6 +18,7 @@ class FloatingOverlayService : Service() {
 
     private lateinit var windowManager: WindowManager
     private lateinit var overlayView: View
+    private var calibrationView: View? = null
     private var isExpanded = false
     private var isAutoDetect = false
 
@@ -26,7 +27,19 @@ class FloatingOverlayService : Service() {
 
     private val cardDetectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (!isAutoDetect) return
+            // Always update the diagnostic readout so we can see whether captures are
+            // arriving and what OCR is reading — regardless of mode.
+            val frame = intent?.getIntExtra(ScreenCaptureService.EXTRA_FRAME_COUNT, 0) ?: 0
+            val total = intent?.getIntExtra(ScreenCaptureService.EXTRA_TOTAL_TEXT, 0) ?: 0
+            val raw = intent?.getStringArrayListExtra(ScreenCaptureService.EXTRA_RAW_TEXT)
+                ?: arrayListOf()
+            val rawSummary = if (raw.isEmpty()) "(no text in zone)"
+                             else raw.take(8).joinToString(",")
+            updateScanStatus("f$frame • $total seen • [$rawSummary]")
+
+            // Card-state updates: same gating as before.
+            if (isExpanded && !isAutoDetect) return
+
             val detected = intent?.getIntegerArrayListExtra(ScreenCaptureService.EXTRA_PLAYER_CARDS)
             val dealer = intent?.getIntExtra(ScreenCaptureService.EXTRA_DEALER_CARD, 0) ?: 0
 
@@ -37,7 +50,6 @@ class FloatingOverlayService : Service() {
                 }
                 if (dealer > 0) dealerCard = dealer
                 updateAdvice()
-                updateScanStatus("Cards detected")
             }
         }
     }
@@ -160,6 +172,81 @@ class FloatingOverlayService : Service() {
                 updateScanStatus("Scanning…")
             }
         }
+
+        overlayView.findViewById<Button>(R.id.btn_calibrate)?.setOnClickListener {
+            startCalibration()
+        }
+    }
+
+    // ─── Calibration overlay ──────────────────────────────────────────────────
+    // A separate full-screen overlay window the user drags over their cards.
+    // Saves rect as fractions in SharedPreferences; CardDetector reads them.
+
+    private fun startCalibration() {
+        if (calibrationView != null) return // already showing
+
+        // Collapse the panel so it doesn't visually fight the calibration UI
+        if (isExpanded) toggleExpanded()
+
+        val inflater = LayoutInflater.from(this)
+        val calView = inflater.inflate(R.layout.calibration_overlay, null)
+        val cv = calView.findViewById<CalibrationView>(R.id.calibration_view)
+
+        // Load any saved calibration so the user can adjust it instead of starting fresh
+        val prefs = getSharedPreferences(CardDetector.PREFS_NAME, MODE_PRIVATE)
+        val savedLeft = prefs.getFloat(CardDetector.KEY_CAL_LEFT, -1f)
+        val savedTop = prefs.getFloat(CardDetector.KEY_CAL_TOP, -1f)
+        val savedRight = prefs.getFloat(CardDetector.KEY_CAL_RIGHT, -1f)
+        val savedBottom = prefs.getFloat(CardDetector.KEY_CAL_BOTTOM, -1f)
+        if (savedLeft >= 0 && savedTop >= 0 && savedRight > savedLeft && savedBottom > savedTop) {
+            cv.post { cv.setRectFractions(savedLeft, savedTop, savedRight, savedBottom) }
+        }
+
+        calView.findViewById<Button>(R.id.btn_cal_save).setOnClickListener {
+            val frac = cv.getRectFractions()
+            prefs.edit()
+                .putFloat(CardDetector.KEY_CAL_LEFT, frac[0])
+                .putFloat(CardDetector.KEY_CAL_TOP, frac[1])
+                .putFloat(CardDetector.KEY_CAL_RIGHT, frac[2])
+                .putFloat(CardDetector.KEY_CAL_BOTTOM, frac[3])
+                .apply()
+            stopCalibration()
+            updateScanStatus("Calibrated — scanning…")
+        }
+
+        calView.findViewById<Button>(R.id.btn_cal_cancel).setOnClickListener {
+            stopCalibration()
+        }
+
+        calView.findViewById<Button>(R.id.btn_cal_reset).setOnClickListener {
+            prefs.edit()
+                .remove(CardDetector.KEY_CAL_LEFT)
+                .remove(CardDetector.KEY_CAL_TOP)
+                .remove(CardDetector.KEY_CAL_RIGHT)
+                .remove(CardDetector.KEY_CAL_BOTTOM)
+                .apply()
+            stopCalibration()
+            updateScanStatus("Calibration cleared — using defaults")
+        }
+
+        val params = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // No FLAG_NOT_FOCUSABLE — we WANT to capture all touches during calibration
+            0,
+            PixelFormat.TRANSLUCENT
+        )
+
+        windowManager.addView(calView, params)
+        calibrationView = calView
+    }
+
+    private fun stopCalibration() {
+        calibrationView?.let {
+            try { windowManager.removeView(it) } catch (_: Exception) {}
+        }
+        calibrationView = null
     }
 
     private fun toggleExpanded() {
@@ -213,6 +300,7 @@ class FloatingOverlayService : Service() {
         val adviceReason = overlayView.findViewById<TextView>(R.id.tv_reason)
         val dealerDisplay = overlayView.findViewById<TextView>(R.id.tv_dealer_card)
         val fabLabel = overlayView.findViewById<TextView>(R.id.fab_label)
+        val fabMath = overlayView.findViewById<TextView>(R.id.fab_math)
 
         dealerDisplay.text = if (dealerCard > 0) {
             "Dealer: ${BlackjackStrategy.cardDisplayName(dealerCard)}"
@@ -223,7 +311,13 @@ class FloatingOverlayService : Service() {
         if (playerCards.isEmpty() || dealerCard == 0) {
             adviceText.text = "Enter cards"
             adviceReason.text = "Tap your cards and the dealer's upcard"
-            fabLabel.text = "BJA"
+            fabLabel.text = "🃏"
+            fabMath?.visibility = View.GONE
+            // Reset FAB color to neutral when nothing detected
+            try {
+                overlayView.findViewById<View>(R.id.fab_toggle).backgroundTintList =
+                    android.content.res.ColorStateList.valueOf(Color.parseColor("#1A1A2E"))
+            } catch (_: Exception) {}
             return
         }
 
@@ -232,12 +326,31 @@ class FloatingOverlayService : Service() {
         adviceReason.text = result.reason
         fabLabel.text = result.action.emoji
 
+        // Live math readout under the FAB emoji, e.g. "K+3=13 v 10"
+        fabMath?.text = buildMathSummary()
+        fabMath?.visibility = View.VISIBLE
+
         try {
             overlayView.findViewById<View>(R.id.fab_toggle).backgroundTintList =
                 android.content.res.ColorStateList.valueOf(Color.parseColor(result.action.colorHex))
         } catch (_: Exception) {}
 
         updateCollapsedView(result)
+    }
+
+    /** Short hand summary for the FAB readout, e.g. "K+3=13 v 10" or "A,5=16/6 v 7". */
+    private fun buildMathSummary(): String {
+        val cardsStr = playerCards.joinToString("+") { BlackjackStrategy.cardDisplayName(it) }
+        // Compute total — count aces as 11 if it doesn't bust, else 1
+        var total = 0
+        var aces = 0
+        for (c in playerCards) {
+            if (c == 1) { aces++; total += 11 } else total += c
+        }
+        while (total > 21 && aces > 0) { total -= 10; aces-- }
+        val totalStr = if (aces > 0 && total <= 21) "$total/${total - 10}" else "$total"
+        val dealerStr = if (dealerCard == 1) "A" else "$dealerCard"
+        return "$cardsStr=$totalStr v $dealerStr"
     }
 
     private fun updatePlayerCardsDisplay() {
@@ -271,6 +384,7 @@ class FloatingOverlayService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         LocalBroadcastManager.getInstance(this).unregisterReceiver(cardDetectionReceiver)
+        stopCalibration()
         if (::overlayView.isInitialized) windowManager.removeView(overlayView)
     }
 

@@ -20,6 +20,9 @@ class ScreenCaptureService : Service() {
         const val ACTION_CARDS_DETECTED = "com.breadlab.blackjackadvisor.CARDS_DETECTED"
         const val EXTRA_PLAYER_CARDS = "player_cards"
         const val EXTRA_DEALER_CARD = "dealer_card"
+        const val EXTRA_FRAME_COUNT = "frame_count"
+        const val EXTRA_TOTAL_TEXT = "total_text"
+        const val EXTRA_RAW_TEXT = "raw_text"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "bja_capture"
@@ -42,9 +45,10 @@ class ScreenCaptureService : Service() {
     private var mediaProjection: MediaProjection? = null
     private var virtualDisplay: VirtualDisplay? = null
     private var imageReader: ImageReader? = null
-    private val cardDetector = CardDetector()
+    private val cardDetector = CardDetector(this)
     private val handler = Handler(Looper.getMainLooper())
     private var isRunning = false
+    private var frameCount = 0
 
     private val captureRunnable = object : Runnable {
         override fun run() {
@@ -121,12 +125,16 @@ class ScreenCaptureService : Service() {
             // Crop away row padding and scale to half-res to speed up ML Kit
             val cropped = Bitmap.createBitmap(rawBitmap, 0, 0, width, height)
             rawBitmap.recycle()
-            val scaled = Bitmap.createScaledBitmap(cropped, width / 2, height / 2, false)
+            // Bilinear filtering (true) → sharper small text → better OCR on card pips.
+            val scaled = Bitmap.createScaledBitmap(cropped, width / 2, height / 2, true)
             cropped.recycle()
 
             cardDetector.detectCards(scaled) { detected ->
                 scaled.recycle()
-                if (detected != null) broadcastDetectedCards(detected)
+                frameCount++
+                // Always broadcast — even if no cards found — so the panel can display
+                // diagnostic info (frame counter, raw OCR text, etc.)
+                broadcastDetectedCards(detected ?: DetectedCards(emptyList(), 0))
             }
         } catch (e: Exception) {
             // ignore transient capture errors
@@ -139,6 +147,9 @@ class ScreenCaptureService : Service() {
         val intent = Intent(ACTION_CARDS_DETECTED).apply {
             putIntegerArrayListExtra(EXTRA_PLAYER_CARDS, ArrayList(detected.playerCards))
             putExtra(EXTRA_DEALER_CARD, detected.dealerCard)
+            putExtra(EXTRA_FRAME_COUNT, frameCount)
+            putExtra(EXTRA_TOTAL_TEXT, detected.totalTextBlocks)
+            putStringArrayListExtra(EXTRA_RAW_TEXT, ArrayList(detected.rawTextInZone))
         }
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }
