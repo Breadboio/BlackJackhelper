@@ -54,6 +54,9 @@ refactor cannot silently break it.
 0 — one source of truth for "is this an advisable situation," replacing the
 scattered guards in the Service, which then renders `INCOMPLETE` as the existing
 "Enter cards" state through the same single rendering path as every other action.
+`INCOMPLETE` rendering must also reset the collapsed FAB to its neutral state
+(🃏, neutral color) so a prior hand's advice emoji/color cannot persist after
+New Hand.
 
 ### 3.2 Dead code (B3) — remove
 
@@ -80,7 +83,7 @@ These are symptoms of the B1 Ace confusion; removing them clarifies intent.
 
 | ID | Bug | Fix |
 |---|---|---|
-| **B23** | `README.md` documents OCR/auto-detect as a *future* "Extending the App" idea though it ships; File Structure omits `ScreenCaptureService`/`CardDetector`/`CalibrationView`; permissions table omits `FOREGROUND_SERVICE_MEDIA_PROJECTION` and `FOREGROUND_SERVICE_SPECIAL_USE`. | Rewrite to shipped reality; document the locked ruleset and the Android 14 per-session consent behavior; correct File Structure (incl. new units) and permissions table. |
+| **B23** | `README.md` documents OCR/auto-detect as a *future* "Extending the App" idea though it ships; File Structure omits `ScreenCaptureService`/`CardDetector`/`CalibrationView`; permissions table omits `FOREGROUND_SERVICE_MEDIA_PROJECTION` and `FOREGROUND_SERVICE_SPECIAL_USE`. | Rewrite to shipped reality; document the locked ruleset and the Android 14 per-session consent behavior; correct File Structure (incl. new units) and permissions table; **retain and prominently surface** the entertainment-only / ToS disclaimer — corrected advice is *more* accurate, which does not reduce the account/fund risk of automated screen-reading advice on a real-money platform. |
 
 ## 4. The corrected strategy table (authoritative)
 
@@ -88,6 +91,11 @@ Source: Wizard of Odds, 4–8 decks, dealer **stands** on soft 17, DAS, late
 surrender (cited in §8). Dealer upcard column = 2–9, 10, A. Internally the
 dealer Ace is `11` (after B1 normalization). `D` = double if legal else
 fallback; `R` = surrender; `Spl` = split; `S` = stand; `H` = hit.
+
+**Assumption:** the engine is standard **total-dependent** basic strategy.
+Composition-dependent refinements (e.g. a 4-card 16 vs 10 standing instead of
+hitting) are deliberately out of scope — a basic-strategy advisor looks up by
+total/soft/pair only. This is a documented design decision, not an omission.
 
 ### 4.1 Hard totals
 | Total | Strategy |
@@ -178,6 +186,13 @@ post-split doubling logic — there is no split-state to track.
 **Dependency direction:** pure units depend on nothing Android; shells depend on
 pure units; the data-flow seams are byte-identical to today.
 
+**Extraction boundaries (do not leak UI/state into the pure units):** the
+`isExpanded && !isAutoDetect` frame gate stays in the Service — the Service
+decides whether to feed a frame to `HandTracker` at all, so `HandTracker` never
+sees `isExpanded`. `lastBalance` is display-only state and stays in the Service
+(not hand-reconciliation state). `confusablePairs` **moves into** `HandTracker`,
+shared by both ambiguity detection and the B25 dealer-flip guard.
+
 ## 6. Data flow
 
 `ScreenCaptureService` (1.5 s capture loop) → `CardDetector.detectCards`
@@ -212,9 +227,12 @@ Context7: local unit tests throw on Android-API access unless
   against §4; explicit named regressions for B1 (all dealer-Ace spots), B2, B4,
   B5, B7, **B26**, B13/B14 (3+ card hands never DOUBLE/SURRENDER), and the
   8,8-never-surrender invariant.
-- **`HandTrackerTest`** — sticky accumulation across dropped frames; N-frame
-  auto-new-hand commit; **B25** (8↔3 confusable dealer flip does *not* reset the
-  hand); ambiguity raised once per pair per hand and resolved; manual ops; reset.
+- **`HandTrackerTest`** — **characterization tests** that pin the *existing*
+  behavior so the extraction is provably behavior-preserving, with B25 as the
+  one deliberately-changed behavior: sticky accumulation across dropped frames;
+  N-frame auto-new-hand commit; **B25** (8↔3 confusable dealer flip does *not*
+  reset the hand — the intentional change); ambiguity raised once per pair per
+  hand and resolved; manual ops; reset.
 - **`BankrollTest`** — stepped-bet boundaries (0.99, 1.0, 4.99, 25, 100, 1000)
   and money formatting (whole vs fractional).
 - **`CalibrationMathTest`** — validity gate; fraction↔pixel round-trip.
@@ -223,10 +241,24 @@ Build additions: `testImplementation 'junit:junit:4.13.2'` and the `src/test`
 source set (neither exists today). `testOptions.unitTests.returnDefaultValues`
 is documented but unnecessary for these pure units.
 
+**Manual device verification** (the half of the headline bugs unit tests cannot
+cover — to be run on a physical Android 14+ device by the user/friend):
+
+- **B19:** "Enable Auto-Detect" → consent prompt appears → capture starts and
+  cards are detected. Stop, then re-enable → consent prompts *again* (no
+  `SecurityException`). Rotate the screen mid-flow → no crash. Background/return
+  → still works.
+- **B20:** Open calibration → press Back → calibration cancels (no trap, no
+  stuck full-screen overlay).
+- **Regression after Service shrink:** FAB drag, expand/collapse, manual card
+  taps, undo, New Hand, the confusable-ambiguity prompt, and the bankroll line
+  all still work; calibrate → save → detection uses the new zones next frame.
+
 **Verification honesty:** if this environment cannot run
 `./gradlew testDebugUnitTest` (no Android SDK / offline), that will be stated
 explicitly and the user asked to run it — no green-test claims without observed
-output (per `verification-before-completion`).
+output (per `verification-before-completion`). The manual checklist above is
+explicitly the user's to run; it will never be reported as passed by me.
 
 ## 9. References (Context7- and authority-verified)
 
@@ -249,13 +281,24 @@ relying on it.
 
 ## 10. Build sequence (for the implementation plan)
 
-1. Add the `src/test` source set + JUnit dependency (no behavior change).
-2. Correct `BlackjackStrategy` (B1, B2, B4, B5, B7, B26, B13/B14, INCOMPLETE,
-   B3 dead-code removal) + `BlackjackStrategyTest` — pure, highest-value, lowest-risk.
-3. Extract `CalibrationMath` + `CalibrationStore`; route `CardDetector` and the
+1. **Toolchain fail-fast:** add the `src/test` source set + `junit:junit:4.13.2`
+   with one trivial passing test; confirm `./gradlew testDebugUnitTest` actually
+   runs in the target environment *before* any other work. If it cannot run
+   here, restructure so the user runs tests at every checkpoint — surfaced now,
+   not after the extraction.
+2. Correct `BlackjackStrategy` (B1, B2, B4, B5, B7, B26, B13/B14,
+   `Action.INCOMPLETE`, B3 dead-code removal) + the full `BlackjackStrategyTest`
+   sweep. Pure, highest-value, lowest-risk.
+3. **CHECKPOINT — hard stop.** Run the strategy tests; report observed output.
+   The user (or their friend) confirms the corrected advice is right. **No
+   extraction or B19/B20 work begins until this is signed off.** This increment
+   is self-contained and shippable on its own.
+4. Extract `CalibrationMath` + `CalibrationStore`; route `CardDetector` and the
    Service through it + `CalibrationMathTest`.
-4. Extract `HandTracker` (with B25 hardening) from the Service + `HandTrackerTest`.
-5. Extract `Bankroll` + `BankrollTest`.
-6. B19 (consent flow) and B20 (calibration Back).
-7. B23 (README rewrite).
-8. Run `./gradlew testDebugUnitTest`; report observed results honestly.
+5. Extract `HandTracker` (with B25 hardening) from the Service + the
+   characterization `HandTrackerTest`.
+6. Extract `Bankroll` + `BankrollTest`.
+7. B19 (Android 14 consent flow) and B20 (calibration Back).
+8. B23 (README rewrite, incl. the retained ToS disclaimer).
+9. Run the full `./gradlew testDebugUnitTest`; report observed results honestly;
+   hand the §8 manual device-verification checklist to the user.
