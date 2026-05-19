@@ -546,8 +546,6 @@ class FloatingOverlayService : Service() {
             overlayView.findViewById<View>(R.id.fab_toggle).backgroundTintList =
                 android.content.res.ColorStateList.valueOf(Color.parseColor(result.action.colorHex))
         } catch (_: Exception) {}
-
-        updateCollapsedView(result)
     }
 
     /** Short hand summary for the FAB readout, e.g. "K+3=13 v 10" or "A,5=16/6 v 7". */
@@ -561,7 +559,7 @@ class FloatingOverlayService : Service() {
         }
         while (total > 21 && aces > 0) { total -= 10; aces-- }
         val totalStr = if (aces > 0 && total <= 21) "$total/${total - 10}" else "$total"
-        val dealerStr = if (dealerCard == 1) "A" else "$dealerCard"
+        val dealerStr = BlackjackStrategy.cardDisplayName(dealerCard)
         return "$cardsStr=$totalStr v $dealerStr"
     }
 

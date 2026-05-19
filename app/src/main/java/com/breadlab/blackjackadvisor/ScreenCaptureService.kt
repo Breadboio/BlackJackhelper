@@ -21,11 +21,9 @@ class ScreenCaptureService : Service() {
         const val EXTRA_PLAYER_CARDS = "player_cards"
         const val EXTRA_DEALER_CARD = "dealer_card"
         const val EXTRA_FRAME_COUNT = "frame_count"
-        const val EXTRA_TOTAL_TEXT = "total_text"
         const val EXTRA_RAW_DEALER = "raw_dealer"
         const val EXTRA_RAW_PLAYER = "raw_player"
         const val EXTRA_BALANCE = "balance"
-        const val EXTRA_RAW_BALANCE = "raw_balance"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "bja_capture"
@@ -149,10 +147,8 @@ class ScreenCaptureService : Service() {
             putIntegerArrayListExtra(EXTRA_PLAYER_CARDS, ArrayList(detected.playerCards))
             putExtra(EXTRA_DEALER_CARD, detected.dealerCard)
             putExtra(EXTRA_FRAME_COUNT, frameCount)
-            putExtra(EXTRA_TOTAL_TEXT, detected.totalTextBlocks)
             putStringArrayListExtra(EXTRA_RAW_DEALER, ArrayList(detected.rawDealerZone))
             putStringArrayListExtra(EXTRA_RAW_PLAYER, ArrayList(detected.rawPlayerZone))
-            putStringArrayListExtra(EXTRA_RAW_BALANCE, ArrayList(detected.rawBalanceZone))
             // -1.0 sentinel = no balance detected this frame.
             putExtra(EXTRA_BALANCE, detected.balance ?: -1.0)
         }

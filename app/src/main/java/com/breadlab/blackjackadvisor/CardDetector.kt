@@ -12,11 +12,9 @@ data class DetectedCards(
     val dealerCard: Int,
     // Player's current bankroll, as read from the BALANCE zone. null if not detected.
     val balance: Double? = null,
-    // Diagnostic fields — populated on every detection cycle.
-    val totalTextBlocks: Int = 0,
+    // Diagnostic fields shown in the scan-status line so we can see what OCR is reading.
     val rawDealerZone: List<String> = emptyList(),
-    val rawPlayerZone: List<String> = emptyList(),
-    val rawBalanceZone: List<String> = emptyList()
+    val rawPlayerZone: List<String> = emptyList()
 )
 
 class CardDetector(private val context: Context? = null) {
@@ -54,7 +52,7 @@ class CardDetector(private val context: Context? = null) {
 
         const val PREFS_NAME = "bja_prefs"
 
-        // Two-rect calibration keys.
+        // Three-rect calibration keys (dealer, player, balance).
         const val KEY_DEALER_LEFT   = "cal_dealer_left"
         const val KEY_DEALER_TOP    = "cal_dealer_top"
         const val KEY_DEALER_RIGHT  = "cal_dealer_right"
@@ -99,11 +97,9 @@ class CardDetector(private val context: Context? = null) {
                 val rawDealer = mutableListOf<String>()
                 val rawPlayer = mutableListOf<String>()
                 val rawBalance = mutableListOf<String>()
-                var totalLines = 0
 
                 for (block in result.textBlocks) {
                     for (line in block.lines) {
-                        totalLines++
                         val text = line.text.trim()
                         val box = line.boundingBox ?: continue
                         val cx = box.centerX()
@@ -138,7 +134,7 @@ class CardDetector(private val context: Context? = null) {
 
                 callback(DetectedCards(
                     playerCards, dealerCard, balance,
-                    totalLines, rawDealer, rawPlayer, rawBalance
+                    rawDealer, rawPlayer
                 ))
             }
             .addOnFailureListener { callback(null) }
