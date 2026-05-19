@@ -24,33 +24,171 @@ class FloatingOverlayService : Service() {
 
     private val playerCards = mutableListOf<Int>()
     private var dealerCard: Int = 0
+    private var lastBalance: Double? = null
+
+    // Auto-new-hand: only triggers on dealer-rank change (NOT player mismatch — that's
+    // unsafe given Stake's 4/8/A OCR misreads). Requires N consecutive frames of the
+    // same new dealer value before committing.
+    private var pendingNewDealer: Int = 0
+    private var pendingNewDealerFrames: Int = 0
+    private val newHandConfirmFrames = 2
+
+    // Ambiguity prompt: when detected cards differ from stored by exactly one
+    // value AND those values are a known confusable pair, ask the user which is right.
+    private var pendingAmbiguity: Pair<Int, Int>? = null  // (storedValue, detectedAlt)
+    private val resolvedConfusables = mutableSetOf<Set<Int>>()
+    private val confusablePairs = setOf(
+        setOf(1, 4),   // A and 4 — angular tops, single dominant stroke
+        setOf(3, 8),   // 3 and 8 — rounded right side vs full loop
+        setOf(6, 8),   // 6 and 8 — both have lower loop
+        setOf(6, 9),   // 6 and 9 — same shape rotated
+        setOf(7, 10),  // 7 and J (J=10) — diagonal stroke confusion
+        setOf(5, 6),   // 5 and 6 — curved bottom
+        setOf(5, 8),   // 5 and 8 — open vs closed top
+        setOf(2, 7)    // 2 and 7 — angular top, diagonal sweep
+    )
 
     private val cardDetectionReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             // Always update the diagnostic readout so we can see whether captures are
             // arriving and what OCR is reading — regardless of mode.
             val frame = intent?.getIntExtra(ScreenCaptureService.EXTRA_FRAME_COUNT, 0) ?: 0
-            val total = intent?.getIntExtra(ScreenCaptureService.EXTRA_TOTAL_TEXT, 0) ?: 0
-            val raw = intent?.getStringArrayListExtra(ScreenCaptureService.EXTRA_RAW_TEXT)
+            val rawDealer = intent?.getStringArrayListExtra(ScreenCaptureService.EXTRA_RAW_DEALER)
                 ?: arrayListOf()
-            val rawSummary = if (raw.isEmpty()) "(no text in zone)"
-                             else raw.take(8).joinToString(",")
-            updateScanStatus("f$frame • $total seen • [$rawSummary]")
+            val rawPlayer = intent?.getStringArrayListExtra(ScreenCaptureService.EXTRA_RAW_PLAYER)
+                ?: arrayListOf()
+            val detected = intent?.getIntegerArrayListExtra(ScreenCaptureService.EXTRA_PLAYER_CARDS)
+                ?: arrayListOf()
+            val dealer = intent?.getIntExtra(ScreenCaptureService.EXTRA_DEALER_CARD, 0) ?: 0
+
+            val dStr = if (rawDealer.isEmpty()) "—" else rawDealer.take(5).joinToString(",")
+            val pStr = if (rawPlayer.isEmpty()) "—" else rawPlayer.take(5).joinToString(",")
+            updateScanStatus("f$frame d:$dealer p:[${detected.joinToString(",")}]  D[$dStr] P[$pStr]")
+
+            // Balance broadcast: -1.0 means none detected this frame.
+            // Allow 0 as a legitimate balance (e.g. switched currencies with no funds).
+            val rawBalance = intent?.getDoubleExtra(ScreenCaptureService.EXTRA_BALANCE, -1.0) ?: -1.0
+            if (rawBalance >= 0) {
+                lastBalance = rawBalance
+                updateBankrollDisplay()
+            }
 
             // Card-state updates: same gating as before.
             if (isExpanded && !isAutoDetect) return
 
-            val detected = intent?.getIntegerArrayListExtra(ScreenCaptureService.EXTRA_PLAYER_CARDS)
-            val dealer = intent?.getIntExtra(ScreenCaptureService.EXTRA_DEALER_CARD, 0) ?: 0
-
-            if (!detected.isNullOrEmpty() || dealer > 0) {
-                if (!detected.isNullOrEmpty()) {
-                    playerCards.clear()
-                    playerCards.addAll(detected)
+            // Auto-new-hand: if dealer value has shifted to a different non-zero rank,
+            // wait for 2 consecutive frames of the same new value before committing.
+            // A single OCR misread can't trigger it; only sustained "different dealer"
+            // counts as a real new deal.
+            val dealerChanged = dealer > 0 && dealerCard > 0 && dealer != dealerCard
+            if (dealerChanged) {
+                if (dealer == pendingNewDealer) {
+                    pendingNewDealerFrames++
+                    if (pendingNewDealerFrames >= newHandConfirmFrames) {
+                        // Confirmed — reset and adopt the new state
+                        playerCards.clear()
+                        playerCards.addAll(detected)
+                        dealerCard = dealer
+                        pendingNewDealer = 0
+                        pendingNewDealerFrames = 0
+                        // New hand — clear any locked confusable resolutions
+                        resolvedConfusables.clear()
+                        clearAmbiguity()
+                        updateAdvice()
+                    }
+                } else {
+                    pendingNewDealer = dealer
+                    pendingNewDealerFrames = 1
                 }
-                if (dealer > 0) dealerCard = dealer
-                updateAdvice()
+                return
             }
+
+            // No dealer-change signal — clear pending and run normal sticky logic.
+            pendingNewDealer = 0
+            pendingNewDealerFrames = 0
+
+            // Sticky accumulation: OCR misses frames all the time, but cards on screen
+            // don't disappear. Once we've detected a card, keep it. Only REPLACE
+            // playerCards when a new frame finds MORE cards than we currently have
+            // (i.e. the player hit). Only set dealerCard once. New Hand button resets.
+            var changed = false
+            if (!detected.isNullOrEmpty() && detected.size > playerCards.size) {
+                playerCards.clear()
+                playerCards.addAll(detected)
+                changed = true
+                // Hand grew (hit) — any prior ambiguity prompt is stale.
+                clearAmbiguity()
+            }
+            if (dealer > 0 && dealerCard == 0) {
+                dealerCard = dealer
+                changed = true
+            }
+
+            // Ambiguity check: same card count but values differ by exactly one
+            // confusable swap (e.g. 4 vs A). Ask the user once per pair per hand.
+            checkAmbiguity(detected)
+
+            if (changed) updateAdvice()
+        }
+    }
+
+    /** Detect a single confusable swap between stored and detected cards. */
+    private fun checkAmbiguity(detected: List<Int>) {
+        // Don't override existing pending — only one prompt at a time
+        if (pendingAmbiguity != null) return
+        if (detected.size != playerCards.size || playerCards.isEmpty()) return
+
+        val storedCounts = playerCards.groupingBy { it }.eachCount()
+        val detectedCounts = detected.groupingBy { it }.eachCount()
+        if (storedCounts == detectedCounts) return
+
+        val storedOnly = storedCounts.keys - detectedCounts.keys
+        val detectedOnly = detectedCounts.keys - storedCounts.keys
+        if (storedOnly.size != 1 || detectedOnly.size != 1) return
+
+        val a = storedOnly.first()
+        val b = detectedOnly.first()
+        val pair = setOf(a, b)
+        if (pair in confusablePairs && pair !in resolvedConfusables) {
+            pendingAmbiguity = Pair(a, b)
+            updateAmbiguityPrompt()
+        }
+    }
+
+    private fun updateAmbiguityPrompt() {
+        val section = overlayView.findViewById<View>(R.id.ambiguity_section)
+        val prompt = overlayView.findViewById<TextView>(R.id.tv_ambiguity_prompt)
+        val btnA = overlayView.findViewById<Button>(R.id.btn_ambig_a)
+        val btnB = overlayView.findViewById<Button>(R.id.btn_ambig_b)
+        val (a, b) = pendingAmbiguity ?: run {
+            section?.visibility = View.GONE
+            return
+        }
+        val aName = BlackjackStrategy.cardDisplayName(a)
+        val bName = BlackjackStrategy.cardDisplayName(b)
+        section?.visibility = View.VISIBLE
+        prompt?.text = "🤔 Is your card a $aName or a $bName?"
+        btnA?.text = aName
+        btnA?.setOnClickListener { resolveAmbiguity(a) }
+        btnB?.text = bName
+        btnB?.setOnClickListener { resolveAmbiguity(b) }
+    }
+
+    private fun resolveAmbiguity(chosenValue: Int) {
+        val (a, b) = pendingAmbiguity ?: return
+        val otherValue = if (chosenValue == a) b else a
+        val idx = playerCards.indexOf(otherValue)
+        if (idx >= 0) playerCards[idx] = chosenValue
+        resolvedConfusables.add(setOf(a, b))
+        pendingAmbiguity = null
+        updateAmbiguityPrompt()
+        updateAdvice()
+    }
+
+    private fun clearAmbiguity() {
+        if (pendingAmbiguity != null) {
+            pendingAmbiguity = null
+            updateAmbiguityPrompt()
         }
     }
 
@@ -154,6 +292,10 @@ class FloatingOverlayService : Service() {
         overlayView.findViewById<Button>(R.id.btn_clear)?.setOnClickListener {
             playerCards.clear()
             dealerCard = 0
+            pendingNewDealer = 0
+            pendingNewDealerFrames = 0
+            resolvedConfusables.clear()
+            clearAmbiguity()
             updateAdvice()
             updatePlayerCardsDisplay()
         }
@@ -192,23 +334,50 @@ class FloatingOverlayService : Service() {
         val calView = inflater.inflate(R.layout.calibration_overlay, null)
         val cv = calView.findViewById<CalibrationView>(R.id.calibration_view)
 
-        // Load any saved calibration so the user can adjust it instead of starting fresh
+        // Load saved rects if any, so the user can adjust instead of restart.
         val prefs = getSharedPreferences(CardDetector.PREFS_NAME, MODE_PRIVATE)
-        val savedLeft = prefs.getFloat(CardDetector.KEY_CAL_LEFT, -1f)
-        val savedTop = prefs.getFloat(CardDetector.KEY_CAL_TOP, -1f)
-        val savedRight = prefs.getFloat(CardDetector.KEY_CAL_RIGHT, -1f)
-        val savedBottom = prefs.getFloat(CardDetector.KEY_CAL_BOTTOM, -1f)
-        if (savedLeft >= 0 && savedTop >= 0 && savedRight > savedLeft && savedBottom > savedTop) {
-            cv.post { cv.setRectFractions(savedLeft, savedTop, savedRight, savedBottom) }
+        val dL = prefs.getFloat(CardDetector.KEY_DEALER_LEFT, -1f)
+        val dT = prefs.getFloat(CardDetector.KEY_DEALER_TOP, -1f)
+        val dR = prefs.getFloat(CardDetector.KEY_DEALER_RIGHT, -1f)
+        val dB = prefs.getFloat(CardDetector.KEY_DEALER_BOTTOM, -1f)
+        val pL = prefs.getFloat(CardDetector.KEY_PLAYER_LEFT, -1f)
+        val pT = prefs.getFloat(CardDetector.KEY_PLAYER_TOP, -1f)
+        val pR = prefs.getFloat(CardDetector.KEY_PLAYER_RIGHT, -1f)
+        val pB = prefs.getFloat(CardDetector.KEY_PLAYER_BOTTOM, -1f)
+        val bL = prefs.getFloat(CardDetector.KEY_BALANCE_LEFT, -1f)
+        val bT = prefs.getFloat(CardDetector.KEY_BALANCE_TOP, -1f)
+        val bR = prefs.getFloat(CardDetector.KEY_BALANCE_RIGHT, -1f)
+        val bB = prefs.getFloat(CardDetector.KEY_BALANCE_BOTTOM, -1f)
+        val haveDealer = dL >= 0 && dT >= 0 && dR > dL && dB > dT
+        val havePlayer = pL >= 0 && pT >= 0 && pR > pL && pB > pT
+        val haveBalance = bL >= 0 && bT >= 0 && bR > bL && bB > bT
+        if (haveDealer && havePlayer) {
+            // Use saved values for any rect we have; fall back to defaults inside CalibrationView
+            // for ones we don't (balance is optional — added later).
+            val bLf = if (haveBalance) bL else 0.15f
+            val bTf = if (haveBalance) bT else 0.06f
+            val bRf = if (haveBalance) bR else 0.60f
+            val bBf = if (haveBalance) bB else 0.11f
+            cv.post { cv.setRects(dL, dT, dR, dB, pL, pT, pR, pB, bLf, bTf, bRf, bBf) }
         }
 
         calView.findViewById<Button>(R.id.btn_cal_save).setOnClickListener {
-            val frac = cv.getRectFractions()
+            val d = cv.getDealerFractions()
+            val p = cv.getPlayerFractions()
+            val b = cv.getBalanceFractions()
             prefs.edit()
-                .putFloat(CardDetector.KEY_CAL_LEFT, frac[0])
-                .putFloat(CardDetector.KEY_CAL_TOP, frac[1])
-                .putFloat(CardDetector.KEY_CAL_RIGHT, frac[2])
-                .putFloat(CardDetector.KEY_CAL_BOTTOM, frac[3])
+                .putFloat(CardDetector.KEY_DEALER_LEFT, d[0])
+                .putFloat(CardDetector.KEY_DEALER_TOP, d[1])
+                .putFloat(CardDetector.KEY_DEALER_RIGHT, d[2])
+                .putFloat(CardDetector.KEY_DEALER_BOTTOM, d[3])
+                .putFloat(CardDetector.KEY_PLAYER_LEFT, p[0])
+                .putFloat(CardDetector.KEY_PLAYER_TOP, p[1])
+                .putFloat(CardDetector.KEY_PLAYER_RIGHT, p[2])
+                .putFloat(CardDetector.KEY_PLAYER_BOTTOM, p[3])
+                .putFloat(CardDetector.KEY_BALANCE_LEFT, b[0])
+                .putFloat(CardDetector.KEY_BALANCE_TOP, b[1])
+                .putFloat(CardDetector.KEY_BALANCE_RIGHT, b[2])
+                .putFloat(CardDetector.KEY_BALANCE_BOTTOM, b[3])
                 .apply()
             stopCalibration()
             updateScanStatus("Calibrated — scanning…")
@@ -220,10 +389,18 @@ class FloatingOverlayService : Service() {
 
         calView.findViewById<Button>(R.id.btn_cal_reset).setOnClickListener {
             prefs.edit()
-                .remove(CardDetector.KEY_CAL_LEFT)
-                .remove(CardDetector.KEY_CAL_TOP)
-                .remove(CardDetector.KEY_CAL_RIGHT)
-                .remove(CardDetector.KEY_CAL_BOTTOM)
+                .remove(CardDetector.KEY_DEALER_LEFT)
+                .remove(CardDetector.KEY_DEALER_TOP)
+                .remove(CardDetector.KEY_DEALER_RIGHT)
+                .remove(CardDetector.KEY_DEALER_BOTTOM)
+                .remove(CardDetector.KEY_PLAYER_LEFT)
+                .remove(CardDetector.KEY_PLAYER_TOP)
+                .remove(CardDetector.KEY_PLAYER_RIGHT)
+                .remove(CardDetector.KEY_PLAYER_BOTTOM)
+                .remove(CardDetector.KEY_BALANCE_LEFT)
+                .remove(CardDetector.KEY_BALANCE_TOP)
+                .remove(CardDetector.KEY_BALANCE_RIGHT)
+                .remove(CardDetector.KEY_BALANCE_BOTTOM)
                 .apply()
             stopCalibration()
             updateScanStatus("Calibration cleared — using defaults")
@@ -291,6 +468,41 @@ class FloatingOverlayService : Service() {
 
     private fun updateScanStatus(msg: String) {
         overlayView.findViewById<TextView>(R.id.tv_scan_status)?.text = "📡 $msg"
+    }
+
+    private fun updateBankrollDisplay() {
+        val bankrollSection = overlayView.findViewById<View>(R.id.bankroll_section) ?: return
+        val balanceText = overlayView.findViewById<TextView>(R.id.tv_balance)
+        val betText = overlayView.findViewById<TextView>(R.id.tv_bet_suggestion)
+        val balance = lastBalance ?: run {
+            bankrollSection.visibility = View.GONE
+            return
+        }
+        bankrollSection.visibility = View.VISIBLE
+        balanceText?.text = "💰 Balance: ${formatMoney(balance)}"
+        betText?.text = "🎯 Suggested bet: ${formatMoney(recommendedBet(balance))}"
+    }
+
+    /** 1% of bankroll, rounded to a clean step (1, 5, 10, 25, 100…) for nicer display. */
+    private fun recommendedBet(balance: Double): Double {
+        val raw = balance * 0.01
+        return when {
+            raw < 1.0    -> 1.0
+            raw < 5.0    -> kotlin.math.round(raw)
+            raw < 25.0   -> (kotlin.math.round(raw / 5.0) * 5.0).coerceAtLeast(5.0)
+            raw < 100.0  -> (kotlin.math.round(raw / 10.0) * 10.0).coerceAtLeast(10.0)
+            raw < 1000.0 -> (kotlin.math.round(raw / 25.0) * 25.0).coerceAtLeast(25.0)
+            else         -> (kotlin.math.round(raw / 100.0) * 100.0).coerceAtLeast(100.0)
+        }
+    }
+
+    private fun formatMoney(amount: Double): String {
+        // Whole numbers get no decimals; fractional gets 2.
+        return if (amount % 1.0 == 0.0) {
+            String.format("%,.0f", amount)
+        } else {
+            String.format("%,.2f", amount)
+        }
     }
 
     private fun updateAdvice() {

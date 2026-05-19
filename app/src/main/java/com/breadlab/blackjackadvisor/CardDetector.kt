@@ -10,74 +10,95 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 data class DetectedCards(
     val playerCards: List<Int>,
     val dealerCard: Int,
-    // Diagnostic fields — populated on every detection cycle even when no cards found.
+    // Player's current bankroll, as read from the BALANCE zone. null if not detected.
+    val balance: Double? = null,
+    // Diagnostic fields — populated on every detection cycle.
     val totalTextBlocks: Int = 0,
-    val rawTextInZone: List<String> = emptyList()
+    val rawDealerZone: List<String> = emptyList(),
+    val rawPlayerZone: List<String> = emptyList(),
+    val rawBalanceZone: List<String> = emptyList()
 )
 
 class CardDetector(private val context: Context? = null) {
 
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
 
-    // Matches valid card rank tokens: A, 2-9, 10, J, Q, K (exact match, case-insensitive)
-    private val cardPattern = Regex("^(A|[2-9]|10|J|Q|K)$", RegexOption.IGNORE_CASE)
+    private val cardPattern = Regex(
+        "^(A|[2-9]|10|J|Q|K)[\\s♠♥♦♣•·.,]{0,3}$",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val multiCardPattern = Regex(
+        "^(A|10|[2-9JQK])(\\s+(A|10|[2-9JQK]))+$",
+        RegexOption.IGNORE_CASE
+    )
+
+    private val rankExtractor = Regex("^(A|10|[2-9]|[JQK])", RegexOption.IGNORE_CASE)
 
     companion object {
-        // Fallback zones when no calibration is saved. Tuned for mobile-browser
-        // blackjack — dealer cards top third, player cards middle area.
-        private const val DEALER_ZONE_TOP    = 0.10
-        private const val DEALER_ZONE_BOTTOM = 0.37
-        private const val PLAYER_ZONE_TOP    = 0.38
-        private const val PLAYER_ZONE_BOTTOM = 0.72
+        // Fallback zones when no calibration is saved.
+        private const val DEFAULT_DEALER_TOP    = 0.10
+        private const val DEFAULT_DEALER_BOTTOM = 0.34
+        private const val DEFAULT_PLAYER_TOP    = 0.40
+        private const val DEFAULT_PLAYER_BOTTOM = 0.56
 
-        // Reject text smaller than this fraction of screen height.
-        private const val MIN_TEXT_HEIGHT_FRAC = 0.018
+        // Min text height as fraction of screen — keeps tiny UI text (balance, tab labels)
+        // out while still catching small card pips. Tuned low because the two-rect
+        // calibration already does the heavy filtering by region.
+        private const val MIN_TEXT_HEIGHT_FRAC = 0.010
 
-        // SharedPreferences keys (must match CalibrationOverlay writer).
+        // Vertical gap (in pixels) required between a candidate "badge" and the cards
+        // below it before we treat it as a hand-total badge. Prevents false drops of
+        // a legitimate hit card that happens to equal the sum of earlier cards.
+        private const val BADGE_GAP_PX = 30
+
         const val PREFS_NAME = "bja_prefs"
-        const val KEY_CAL_LEFT   = "cal_left"
-        const val KEY_CAL_TOP    = "cal_top"
-        const val KEY_CAL_RIGHT  = "cal_right"
-        const val KEY_CAL_BOTTOM = "cal_bottom"
+
+        // Two-rect calibration keys.
+        const val KEY_DEALER_LEFT   = "cal_dealer_left"
+        const val KEY_DEALER_TOP    = "cal_dealer_top"
+        const val KEY_DEALER_RIGHT  = "cal_dealer_right"
+        const val KEY_DEALER_BOTTOM = "cal_dealer_bottom"
+        const val KEY_PLAYER_LEFT   = "cal_player_left"
+        const val KEY_PLAYER_TOP    = "cal_player_top"
+        const val KEY_PLAYER_RIGHT  = "cal_player_right"
+        const val KEY_PLAYER_BOTTOM = "cal_player_bottom"
+        const val KEY_BALANCE_LEFT   = "cal_balance_left"
+        const val KEY_BALANCE_TOP    = "cal_balance_top"
+        const val KEY_BALANCE_RIGHT  = "cal_balance_right"
+        const val KEY_BALANCE_BOTTOM = "cal_balance_bottom"
     }
+
+    // Matches a balance-style number: "189,994.26", "12,500", "5.50", etc.
+    private val balanceNumberPattern = Regex("[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
 
     fun detectCards(bitmap: Bitmap, callback: (DetectedCards?) -> Unit) {
         val screenW = bitmap.width
         val screenH = bitmap.height
         val minTextH = (screenH * MIN_TEXT_HEIGHT_FRAC).toInt()
 
-        val zone = loadCalibratedZone(screenW, screenH)
-        val dealerTop: Int
-        val dealerBottom: Int
-        val playerTop: Int
-        val playerBottom: Int
-        val leftX: Int
-        val rightX: Int
+        val (dealerZone, playerZone, balanceZone) = loadCalibratedZones(screenW, screenH)
 
-        if (zone != null) {
-            // Calibrated: top half = dealer, bottom half = player
-            leftX = zone.left
-            rightX = zone.right
-            val midY = (zone.top + zone.bottom) / 2
-            dealerTop = zone.top
-            dealerBottom = midY
-            playerTop = midY
-            playerBottom = zone.bottom
-        } else {
-            // Fallback to default vertical bands, full width
-            leftX = 0
-            rightX = screenW
-            dealerTop    = (screenH * DEALER_ZONE_TOP).toInt()
-            dealerBottom = (screenH * DEALER_ZONE_BOTTOM).toInt()
-            playerTop    = (screenH * PLAYER_ZONE_TOP).toInt()
-            playerBottom = (screenH * PLAYER_ZONE_BOTTOM).toInt()
-        }
+        // Dealer zone (calibrated or default)
+        val dz = dealerZone ?: Rect(
+            0, (screenH * DEFAULT_DEALER_TOP).toInt(),
+            screenW, (screenH * DEFAULT_DEALER_BOTTOM).toInt()
+        )
+        // Player zone (calibrated or default)
+        val pz = playerZone ?: Rect(
+            0, (screenH * DEFAULT_PLAYER_TOP).toInt(),
+            screenW, (screenH * DEFAULT_PLAYER_BOTTOM).toInt()
+        )
+        // Balance zone is optional — null means user hasn't calibrated it yet.
+        val bz = balanceZone
 
         recognizer.process(InputImage.fromBitmap(bitmap, 0))
             .addOnSuccessListener { result ->
-                val playerCards = mutableListOf<Int>()
-                var dealerCard = 0
-                val rawInZone = mutableListOf<String>()
+                val playerHits = mutableListOf<DetectedHit>()
+                val dealerHits = mutableListOf<DetectedHit>()
+                val rawDealer = mutableListOf<String>()
+                val rawPlayer = mutableListOf<String>()
+                val rawBalance = mutableListOf<String>()
                 var totalLines = 0
 
                 for (block in result.textBlocks) {
@@ -88,44 +109,73 @@ class CardDetector(private val context: Context? = null) {
                         val cx = box.centerX()
                         val cy = box.centerY()
 
-                        // Collect anything inside the calibrated/default zone for diagnostics —
-                        // including non-card text, so we can see what OCR is reading.
-                        if (cx in leftX..rightX && cy in dealerTop..playerBottom) {
-                            rawInZone.add(text)
-                        }
+                        val inDealer = dz.contains(cx, cy)
+                        val inPlayer = pz.contains(cx, cy)
+                        val inBalance = bz?.contains(cx, cy) == true
 
-                        if (!cardPattern.matches(text)) continue
+                        if (inDealer) rawDealer.add(text)
+                        if (inPlayer) rawPlayer.add(text)
+                        if (inBalance) rawBalance.add(text)
+
+                        if (!inDealer && !inPlayer) continue
+                        val values = extractCardValues(text)
+                        if (values.isEmpty()) continue
                         if (box.height() < minTextH) continue
-                        if (cx !in leftX..rightX) continue
 
-                        val value = parseCardValue(text.uppercase())
-                        if (value == 0) continue
-
-                        when {
-                            cy in dealerTop..dealerBottom && dealerCard == 0 -> {
-                                dealerCard = value
-                            }
-                            cy in playerTop..playerBottom && playerCards.size < 8 -> {
-                                playerCards.add(value)
-                            }
+                        for (value in values) {
+                            if (inDealer) dealerHits.add(DetectedHit(value, cy))
+                            else if (inPlayer) playerHits.add(DetectedHit(value, cy))
                         }
                     }
                 }
 
-                // Always callback (even with no cards) so diagnostics flow through.
-                callback(DetectedCards(playerCards, dealerCard, totalLines, rawInZone))
+                val dealerFinal = filterHandTotalBadge(dealerHits)
+                val playerFinal = filterHandTotalBadge(playerHits)
+
+                val dealerCard = dealerFinal.firstOrNull() ?: 0
+                val playerCards = playerFinal.take(8)
+                val balance = extractBalance(rawBalance)
+
+                callback(DetectedCards(
+                    playerCards, dealerCard, balance,
+                    totalLines, rawDealer, rawPlayer, rawBalance
+                ))
             }
             .addOnFailureListener { callback(null) }
     }
 
-    /** Returns the user-calibrated rect in pixels, or null if no valid calibration saved. */
-    private fun loadCalibratedZone(w: Int, h: Int): Rect? {
-        val ctx = context ?: return null
+    /** Pick the largest numeric value found in the balance zone text. */
+    private fun extractBalance(texts: List<String>): Double? {
+        var maxValue: Double? = null
+        for (text in texts) {
+            for (m in balanceNumberPattern.findAll(text)) {
+                val cleaned = m.value.replace(",", "")
+                val v = cleaned.toDoubleOrNull() ?: continue
+                if (maxValue == null || v > maxValue) maxValue = v
+            }
+        }
+        return maxValue
+    }
+
+    /** Returns (dealerZone, playerZone, balanceZone) in pixel coords, or null for each if unsaved. */
+    private fun loadCalibratedZones(w: Int, h: Int): Triple<Rect?, Rect?, Rect?> {
+        val ctx = context ?: return Triple(null, null, null)
         val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val left = prefs.getFloat(KEY_CAL_LEFT, -1f)
-        val top = prefs.getFloat(KEY_CAL_TOP, -1f)
-        val right = prefs.getFloat(KEY_CAL_RIGHT, -1f)
-        val bottom = prefs.getFloat(KEY_CAL_BOTTOM, -1f)
+        val dealer = readRect(prefs, w, h, KEY_DEALER_LEFT, KEY_DEALER_TOP, KEY_DEALER_RIGHT, KEY_DEALER_BOTTOM)
+        val player = readRect(prefs, w, h, KEY_PLAYER_LEFT, KEY_PLAYER_TOP, KEY_PLAYER_RIGHT, KEY_PLAYER_BOTTOM)
+        val balance = readRect(prefs, w, h, KEY_BALANCE_LEFT, KEY_BALANCE_TOP, KEY_BALANCE_RIGHT, KEY_BALANCE_BOTTOM)
+        return Triple(dealer, player, balance)
+    }
+
+    private fun readRect(
+        prefs: android.content.SharedPreferences,
+        w: Int, h: Int,
+        keyL: String, keyT: String, keyR: String, keyB: String
+    ): Rect? {
+        val left = prefs.getFloat(keyL, -1f)
+        val top = prefs.getFloat(keyT, -1f)
+        val right = prefs.getFloat(keyR, -1f)
+        val bottom = prefs.getFloat(keyB, -1f)
         if (left < 0 || top < 0 || right <= left || bottom <= top) return null
         return Rect(
             (w * left).toInt(),
@@ -135,10 +185,71 @@ class CardDetector(private val context: Context? = null) {
         )
     }
 
+    /**
+     * Parse an OCR text line and return zero, one, or more card values.
+     * "9", "9♥"          → [9]
+     * "Q 10"             → [10, 10]  (whitespace-separated multi-rank)
+     * "9K"               → [9, 10]   (glued multi-rank)
+     * "BLACKJACK PAYS 2" → []        (non-rank chars block all match paths)
+     */
+    private fun extractCardValues(text: String): List<Int> {
+        if (cardPattern.matches(text)) {
+            val rank = rankExtractor.find(text)?.value ?: return emptyList()
+            val v = parseCardValue(rank.uppercase())
+            return if (v > 0) listOf(v) else emptyList()
+        }
+        if (multiCardPattern.matches(text)) {
+            val values = mutableListOf<Int>()
+            for (token in text.split(Regex("\\s+"))) {
+                val rank = rankExtractor.find(token)?.value ?: continue
+                val v = parseCardValue(rank.uppercase())
+                if (v > 0) values.add(v)
+            }
+            return values
+        }
+        // Glued ranks with no separator. Accept only if all of the text is rank chars.
+        val rankFinder = Regex("(10|[A2-9JQK])", RegexOption.IGNORE_CASE)
+        val matches = rankFinder.findAll(text).toList()
+        if (matches.size >= 2) {
+            val cleanText = text.replace(Regex("[\\s♠♥♦♣•·.,]"), "")
+            val matchedLength = matches.sumOf { it.value.length }
+            if (matchedLength == cleanText.length) {
+                return matches.map { parseCardValue(it.value.uppercase()) }
+            }
+        }
+        return emptyList()
+    }
+
     private fun parseCardValue(text: String): Int = when (text) {
         "A" -> 1
         "J", "Q", "K" -> 10
         else -> text.toIntOrNull() ?: 0
+    }
+
+    /** One OCR card detection — value + the Y center of the bounding box, for badge filtering. */
+    private data class DetectedHit(val value: Int, val y: Int)
+
+    /**
+     * If the topmost hit is clearly above the others AND its value equals the sum of
+     * the rest, treat it as the hand-total badge and drop it. Falls through unchanged
+     * if there's no clear separation (so a hit card stacked at the same Y as earlier
+     * cards isn't mistakenly dropped just because its value happens to match the sum).
+     */
+    private fun filterHandTotalBadge(hits: List<DetectedHit>): List<Int> {
+        if (hits.size < 3) return hits.map { it.value }
+        val sorted = hits.sortedBy { it.y }
+        val topmost = sorted.first()
+        val others = sorted.drop(1)
+        val gap = others.minOf { it.y } - topmost.y
+        if (gap < BADGE_GAP_PX) return hits.map { it.value }
+        val othersSum = others.sumOf { it.value }
+        // For aces, also accept the "soft total" form by checking aces-as-11 sum.
+        val othersSumWithAce = othersSum + others.count { it.value == 1 } * 10
+        return if (topmost.value == othersSum || topmost.value == othersSumWithAce) {
+            others.map { it.value }
+        } else {
+            hits.map { it.value }
+        }
     }
 
     fun close() = recognizer.close()

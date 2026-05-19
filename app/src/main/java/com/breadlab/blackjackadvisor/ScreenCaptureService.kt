@@ -22,7 +22,10 @@ class ScreenCaptureService : Service() {
         const val EXTRA_DEALER_CARD = "dealer_card"
         const val EXTRA_FRAME_COUNT = "frame_count"
         const val EXTRA_TOTAL_TEXT = "total_text"
-        const val EXTRA_RAW_TEXT = "raw_text"
+        const val EXTRA_RAW_DEALER = "raw_dealer"
+        const val EXTRA_RAW_PLAYER = "raw_player"
+        const val EXTRA_BALANCE = "balance"
+        const val EXTRA_RAW_BALANCE = "raw_balance"
         private const val EXTRA_RESULT_CODE = "result_code"
         private const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "bja_capture"
@@ -122,18 +125,16 @@ class ScreenCaptureService : Service() {
             )
             rawBitmap.copyPixelsFromBuffer(plane.buffer)
 
-            // Crop away row padding and scale to half-res to speed up ML Kit
+            // Crop away the row padding from the surface buffer. We used to also
+            // downscale to half-res for speed, but that lost too much detail on small
+            // card pips (Stake's "9" and "4" went undetected). Full-res OCR is slower
+            // but still well under the 1.5s capture interval, and accuracy matters more.
             val cropped = Bitmap.createBitmap(rawBitmap, 0, 0, width, height)
             rawBitmap.recycle()
-            // Bilinear filtering (true) → sharper small text → better OCR on card pips.
-            val scaled = Bitmap.createScaledBitmap(cropped, width / 2, height / 2, true)
-            cropped.recycle()
 
-            cardDetector.detectCards(scaled) { detected ->
-                scaled.recycle()
+            cardDetector.detectCards(cropped) { detected ->
+                cropped.recycle()
                 frameCount++
-                // Always broadcast — even if no cards found — so the panel can display
-                // diagnostic info (frame counter, raw OCR text, etc.)
                 broadcastDetectedCards(detected ?: DetectedCards(emptyList(), 0))
             }
         } catch (e: Exception) {
@@ -149,7 +150,11 @@ class ScreenCaptureService : Service() {
             putExtra(EXTRA_DEALER_CARD, detected.dealerCard)
             putExtra(EXTRA_FRAME_COUNT, frameCount)
             putExtra(EXTRA_TOTAL_TEXT, detected.totalTextBlocks)
-            putStringArrayListExtra(EXTRA_RAW_TEXT, ArrayList(detected.rawTextInZone))
+            putStringArrayListExtra(EXTRA_RAW_DEALER, ArrayList(detected.rawDealerZone))
+            putStringArrayListExtra(EXTRA_RAW_PLAYER, ArrayList(detected.rawPlayerZone))
+            putStringArrayListExtra(EXTRA_RAW_BALANCE, ArrayList(detected.rawBalanceZone))
+            // -1.0 sentinel = no balance detected this frame.
+            putExtra(EXTRA_BALANCE, detected.balance ?: -1.0)
         }
         LocalBroadcastManager.getInstance(this).sendBroadcast(intent)
     }

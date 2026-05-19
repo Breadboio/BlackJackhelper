@@ -80,6 +80,90 @@
                 android:textSize="12sp" />
         </LinearLayout>
 
+        <!-- Ambiguity prompt: shown when OCR keeps flipping between two confusable card values -->
+        <LinearLayout
+            android:id="@+id/ambiguity_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#3D2A0A"
+            android:padding="10dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tv_ambiguity_prompt"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🤔 Which card is this?"
+                android:textColor="#F39C12"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:gravity="center" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/btn_ambig_a"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginEnd="3dp"
+                    android:text="A"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#8E44AD" />
+
+                <Button
+                    android:id="@+id/btn_ambig_b"
+                    android:layout_width="0dp"
+                    android:layout_height="38dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="3dp"
+                    android:text="4"
+                    android:textColor="#FFFFFF"
+                    android:textSize="14sp"
+                    android:textStyle="bold"
+                    android:backgroundTint="#3D5A80" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Bankroll: balance + recommended bet -->
+        <LinearLayout
+            android:id="@+id/bankroll_section"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#0F1B14"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/tv_balance"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="💰 Balance: —"
+                android:textColor="#F39C12"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tv_bet_suggestion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="🎯 Suggested bet: —"
+                android:textColor="#C0D0E0"
+                android:textSize="11sp" />
+        </LinearLayout>
+
         <!-- Advice Box -->
         <LinearLayout
             android:layout_width="match_parent"
