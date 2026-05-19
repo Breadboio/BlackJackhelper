@@ -1,6 +1,7 @@
 package com.breadlab.blackjackadvisor
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Rect
 
 /** Pure validity + fraction→pixel conversion. JVM-tested; no Android types. */
@@ -32,6 +33,7 @@ class CalibrationStore(context: Context) {
     /** Pixel Rect for a zone at the given screen size, or null if uncalibrated. */
     fun rect(zone: Zone, w: Int, h: Int): Rect? {
         val f = fractions(zone) ?: return null
+        // cannot be null: fractions() already applied the same validity predicate
         val p = CalibrationMath.toPixels(f[0], f[1], f[2], f[3], w, h) ?: return null
         return Rect(p[0], p[1], p[2], p[3])
     }
@@ -44,11 +46,11 @@ class CalibrationStore(context: Context) {
 
     fun clear() {
         prefs.edit().apply {
-            Zone.values().forEach { z -> z.keys.forEach { remove(it) } }
+            Zone.entries.forEach { z -> z.keys.forEach { remove(it) } }
         }.apply()
     }
 
-    private fun android.content.SharedPreferences.Editor.putZone(z: Zone, f: FloatArray) {
+    private fun SharedPreferences.Editor.putZone(z: Zone, f: FloatArray) {
         putFloat(z.keys[0], f[0]); putFloat(z.keys[1], f[1])
         putFloat(z.keys[2], f[2]); putFloat(z.keys[3], f[3])
     }

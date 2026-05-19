@@ -7,6 +7,8 @@ import org.junit.Test
 class CalibrationMathTest {
     @Test fun invalidWhenNegative() =
         assertNull(CalibrationMath.toPixels(-1f, 0.1f, 0.5f, 0.2f, 1000, 2000))
+    @Test fun invalidWhenNegativeTop() =
+        assertNull(CalibrationMath.toPixels(0.1f, -1f, 0.5f, 0.9f, 1000, 2000))
     @Test fun invalidWhenRightNotPastLeft() =
         assertNull(CalibrationMath.toPixels(0.5f, 0.1f, 0.5f, 0.2f, 1000, 2000))
     @Test fun invalidWhenBottomNotPastTop() =
