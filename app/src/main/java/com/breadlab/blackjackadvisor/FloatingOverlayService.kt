@@ -335,52 +335,18 @@ class FloatingOverlayService : Service() {
         val cv = calView.findViewById<CalibrationView>(R.id.calibration_view)
 
         // Load saved rects if any, so the user can adjust instead of restart.
-        val prefs = getSharedPreferences(CardDetector.PREFS_NAME, MODE_PRIVATE)
-        val dL = prefs.getFloat(CardDetector.KEY_DEALER_LEFT, -1f)
-        val dT = prefs.getFloat(CardDetector.KEY_DEALER_TOP, -1f)
-        val dR = prefs.getFloat(CardDetector.KEY_DEALER_RIGHT, -1f)
-        val dB = prefs.getFloat(CardDetector.KEY_DEALER_BOTTOM, -1f)
-        val pL = prefs.getFloat(CardDetector.KEY_PLAYER_LEFT, -1f)
-        val pT = prefs.getFloat(CardDetector.KEY_PLAYER_TOP, -1f)
-        val pR = prefs.getFloat(CardDetector.KEY_PLAYER_RIGHT, -1f)
-        val pB = prefs.getFloat(CardDetector.KEY_PLAYER_BOTTOM, -1f)
-        val bL = prefs.getFloat(CardDetector.KEY_BALANCE_LEFT, -1f)
-        val bT = prefs.getFloat(CardDetector.KEY_BALANCE_TOP, -1f)
-        val bR = prefs.getFloat(CardDetector.KEY_BALANCE_RIGHT, -1f)
-        val bB = prefs.getFloat(CardDetector.KEY_BALANCE_BOTTOM, -1f)
-        val haveDealer = dL >= 0 && dT >= 0 && dR > dL && dB > dT
-        val havePlayer = pL >= 0 && pT >= 0 && pR > pL && pB > pT
-        val haveBalance = bL >= 0 && bT >= 0 && bR > bL && bB > bT
-        if (haveDealer && havePlayer) {
-            // Use saved values for any rect we have; fall back to defaults inside CalibrationView
-            // for ones we don't (balance is optional — added later).
-            val bLf = if (haveBalance) bL else 0.15f
-            val bTf = if (haveBalance) bT else 0.06f
-            val bRf = if (haveBalance) bR else 0.60f
-            val bBf = if (haveBalance) bB else 0.11f
-            cv.post { cv.setRects(dL, dT, dR, dB, pL, pT, pR, pB, bLf, bTf, bRf, bBf) }
+        val store = CalibrationStore(this)
+        val d = store.fractions(CalibrationStore.Zone.DEALER)
+        val p = store.fractions(CalibrationStore.Zone.PLAYER)
+        val b = store.fractions(CalibrationStore.Zone.BALANCE)
+        if (d != null && p != null) {
+            val bb = b ?: floatArrayOf(0.15f, 0.06f, 0.60f, 0.11f)
+            cv.post { cv.setRects(d[0], d[1], d[2], d[3], p[0], p[1], p[2], p[3], bb[0], bb[1], bb[2], bb[3]) }
         }
 
         calView.findViewById<Button>(R.id.btn_cal_save).setOnClickListener {
-            val d = cv.getDealerFractions()
-            val p = cv.getPlayerFractions()
-            val b = cv.getBalanceFractions()
-            prefs.edit()
-                .putFloat(CardDetector.KEY_DEALER_LEFT, d[0])
-                .putFloat(CardDetector.KEY_DEALER_TOP, d[1])
-                .putFloat(CardDetector.KEY_DEALER_RIGHT, d[2])
-                .putFloat(CardDetector.KEY_DEALER_BOTTOM, d[3])
-                .putFloat(CardDetector.KEY_PLAYER_LEFT, p[0])
-                .putFloat(CardDetector.KEY_PLAYER_TOP, p[1])
-                .putFloat(CardDetector.KEY_PLAYER_RIGHT, p[2])
-                .putFloat(CardDetector.KEY_PLAYER_BOTTOM, p[3])
-                .putFloat(CardDetector.KEY_BALANCE_LEFT, b[0])
-                .putFloat(CardDetector.KEY_BALANCE_TOP, b[1])
-                .putFloat(CardDetector.KEY_BALANCE_RIGHT, b[2])
-                .putFloat(CardDetector.KEY_BALANCE_BOTTOM, b[3])
-                .apply()
-            stopCalibration()
-            updateScanStatus("Calibrated — scanning…")
+            store.save(cv.getDealerFractions(), cv.getPlayerFractions(), cv.getBalanceFractions())
+            stopCalibration(); updateScanStatus("Calibrated — scanning…")
         }
 
         calView.findViewById<Button>(R.id.btn_cal_cancel).setOnClickListener {
@@ -388,22 +354,7 @@ class FloatingOverlayService : Service() {
         }
 
         calView.findViewById<Button>(R.id.btn_cal_reset).setOnClickListener {
-            prefs.edit()
-                .remove(CardDetector.KEY_DEALER_LEFT)
-                .remove(CardDetector.KEY_DEALER_TOP)
-                .remove(CardDetector.KEY_DEALER_RIGHT)
-                .remove(CardDetector.KEY_DEALER_BOTTOM)
-                .remove(CardDetector.KEY_PLAYER_LEFT)
-                .remove(CardDetector.KEY_PLAYER_TOP)
-                .remove(CardDetector.KEY_PLAYER_RIGHT)
-                .remove(CardDetector.KEY_PLAYER_BOTTOM)
-                .remove(CardDetector.KEY_BALANCE_LEFT)
-                .remove(CardDetector.KEY_BALANCE_TOP)
-                .remove(CardDetector.KEY_BALANCE_RIGHT)
-                .remove(CardDetector.KEY_BALANCE_BOTTOM)
-                .apply()
-            stopCalibration()
-            updateScanStatus("Calibration cleared — using defaults")
+            store.clear(); stopCalibration(); updateScanStatus("Calibration cleared — using defaults")
         }
 
         val params = WindowManager.LayoutParams(

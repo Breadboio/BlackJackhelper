@@ -50,21 +50,6 @@ class CardDetector(private val context: Context? = null) {
         // a legitimate hit card that happens to equal the sum of earlier cards.
         private const val BADGE_GAP_PX = 30
 
-        const val PREFS_NAME = "bja_prefs"
-
-        // Three-rect calibration keys (dealer, player, balance).
-        const val KEY_DEALER_LEFT   = "cal_dealer_left"
-        const val KEY_DEALER_TOP    = "cal_dealer_top"
-        const val KEY_DEALER_RIGHT  = "cal_dealer_right"
-        const val KEY_DEALER_BOTTOM = "cal_dealer_bottom"
-        const val KEY_PLAYER_LEFT   = "cal_player_left"
-        const val KEY_PLAYER_TOP    = "cal_player_top"
-        const val KEY_PLAYER_RIGHT  = "cal_player_right"
-        const val KEY_PLAYER_BOTTOM = "cal_player_bottom"
-        const val KEY_BALANCE_LEFT   = "cal_balance_left"
-        const val KEY_BALANCE_TOP    = "cal_balance_top"
-        const val KEY_BALANCE_RIGHT  = "cal_balance_right"
-        const val KEY_BALANCE_BOTTOM = "cal_balance_bottom"
     }
 
     // Matches a balance-style number: "189,994.26", "12,500", "5.50", etc.
@@ -75,7 +60,10 @@ class CardDetector(private val context: Context? = null) {
         val screenH = bitmap.height
         val minTextH = (screenH * MIN_TEXT_HEIGHT_FRAC).toInt()
 
-        val (dealerZone, playerZone, balanceZone) = loadCalibratedZones(screenW, screenH)
+        val store = context?.let { CalibrationStore(it) }
+        val dealerZone = store?.rect(CalibrationStore.Zone.DEALER, screenW, screenH)
+        val playerZone = store?.rect(CalibrationStore.Zone.PLAYER, screenW, screenH)
+        val balanceZone = store?.rect(CalibrationStore.Zone.BALANCE, screenW, screenH)
 
         // Dealer zone (calibrated or default)
         val dz = dealerZone ?: Rect(
@@ -151,34 +139,6 @@ class CardDetector(private val context: Context? = null) {
             }
         }
         return maxValue
-    }
-
-    /** Returns (dealerZone, playerZone, balanceZone) in pixel coords, or null for each if unsaved. */
-    private fun loadCalibratedZones(w: Int, h: Int): Triple<Rect?, Rect?, Rect?> {
-        val ctx = context ?: return Triple(null, null, null)
-        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val dealer = readRect(prefs, w, h, KEY_DEALER_LEFT, KEY_DEALER_TOP, KEY_DEALER_RIGHT, KEY_DEALER_BOTTOM)
-        val player = readRect(prefs, w, h, KEY_PLAYER_LEFT, KEY_PLAYER_TOP, KEY_PLAYER_RIGHT, KEY_PLAYER_BOTTOM)
-        val balance = readRect(prefs, w, h, KEY_BALANCE_LEFT, KEY_BALANCE_TOP, KEY_BALANCE_RIGHT, KEY_BALANCE_BOTTOM)
-        return Triple(dealer, player, balance)
-    }
-
-    private fun readRect(
-        prefs: android.content.SharedPreferences,
-        w: Int, h: Int,
-        keyL: String, keyT: String, keyR: String, keyB: String
-    ): Rect? {
-        val left = prefs.getFloat(keyL, -1f)
-        val top = prefs.getFloat(keyT, -1f)
-        val right = prefs.getFloat(keyR, -1f)
-        val bottom = prefs.getFloat(keyB, -1f)
-        if (left < 0 || top < 0 || right <= left || bottom <= top) return null
-        return Rect(
-            (w * left).toInt(),
-            (h * top).toInt(),
-            (w * right).toInt(),
-            (h * bottom).toInt()
-        )
     }
 
     /**
