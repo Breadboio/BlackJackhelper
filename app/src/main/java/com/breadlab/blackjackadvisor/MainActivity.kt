@@ -18,9 +18,6 @@ class MainActivity : AppCompatActivity() {
         private const val REQUEST_SCREEN_CAPTURE = 1002
     }
 
-    private var screenCaptureResultCode: Int = -1
-    private var screenCaptureResultData: Intent? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -44,11 +41,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btn_start_overlay).setOnClickListener {
             if (Settings.canDrawOverlays(this)) {
                 FloatingOverlayService.start(this)
-                // Start screen capture service if permission was granted
-                val data = screenCaptureResultData
-                if (data != null) {
-                    ScreenCaptureService.start(this, screenCaptureResultCode, data)
-                }
                 updateOverlayRunningState(true)
                 moveTaskToBack(true)
             } else {
@@ -103,7 +95,7 @@ class MainActivity : AppCompatActivity() {
         val enableBtn = findViewById<Button>(R.id.btn_enable_auto_detect)
 
         if (granted) {
-            statusText.text = "✅ Screen capture granted — auto-detect available"
+            statusText.text = "✅ Auto-detect running — switch to your game"
             statusText.setTextColor(getColor(android.R.color.holo_green_dark))
             enableBtn.text = "Re-grant Capture Permission"
         } else {
@@ -130,8 +122,8 @@ class MainActivity : AppCompatActivity() {
             REQUEST_SCREEN_CAPTURE -> {
                 val granted = resultCode == Activity.RESULT_OK && data != null
                 if (granted) {
-                    screenCaptureResultCode = resultCode
-                    screenCaptureResultData = data
+                    // Android 14: consent is single-use — consume it NOW, never cache.
+                    ScreenCaptureService.start(this, resultCode, data!!)
                 }
                 updateScreenCaptureStatus(granted)
             }

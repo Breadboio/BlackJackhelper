@@ -227,6 +227,13 @@ class FloatingOverlayService : Service() {
         )
 
         windowManager.addView(calView, params)
+        calView.isFocusableInTouchMode = true
+        calView.requestFocus()
+        calView.setOnKeyListener { _, keyCode, event ->
+            if (keyCode == KeyEvent.KEYCODE_BACK && event.action == KeyEvent.ACTION_UP) {
+                stopCalibration(); true
+            } else false
+        }
         calibrationView = calView
     }
 

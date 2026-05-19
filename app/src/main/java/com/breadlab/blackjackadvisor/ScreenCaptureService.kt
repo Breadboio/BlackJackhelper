@@ -75,13 +75,14 @@ class ScreenCaptureService : Service() {
         val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return START_NOT_STICKY
 
         val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        mediaProjection = projectionManager.getMediaProjection(resultCode, resultData).also { mp ->
-            mp.registerCallback(object : MediaProjection.Callback() {
-                override fun onStop() {
-                    isRunning = false
-                    handler.removeCallbacks(captureRunnable)
-                }
-            }, null)
+        mediaProjection = try {
+            projectionManager.getMediaProjection(resultCode, resultData).also { mp ->
+                mp.registerCallback(object : MediaProjection.Callback() {
+                    override fun onStop() { isRunning = false; handler.removeCallbacks(captureRunnable) }
+                }, null)
+            }
+        } catch (e: SecurityException) {
+            stopSelf(); return START_NOT_STICKY
         }
 
         setupVirtualDisplay()
