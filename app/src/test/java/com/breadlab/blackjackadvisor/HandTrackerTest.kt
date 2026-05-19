@@ -47,7 +47,7 @@ class HandTrackerTest {
         val t = tracker()
         t.onFrame(listOf(4), 7)
         val u = t.onFrame(listOf(1), 7)
-        assertEquals(1 to 4, u.ambiguity!!.let { it.stored to it.detectedAlt })
+        assertEquals(4 to 1, u.ambiguity!!.let { it.stored to it.detectedAlt })
         t.resolveAmbiguity(4)
         assertNull(t.onFrame(listOf(1), 7).ambiguity)
         assertEquals(listOf(4), t.playerCards)
