@@ -74,6 +74,8 @@ class ScreenCaptureService : Service() {
         @Suppress("DEPRECATION")
         val resultData = intent.getParcelableExtra<Intent>(EXTRA_RESULT_DATA) ?: return START_NOT_STICKY
 
+        teardownCapture() // release any prior session before starting a new one (re-grant)
+
         val projectionManager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
         mediaProjection = try {
             projectionManager.getMediaProjection(resultCode, resultData).also { mp ->
@@ -171,13 +173,18 @@ class ScreenCaptureService : Service() {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-    override fun onDestroy() {
-        super.onDestroy()
+    /** Releases any live capture session. Safe to call when nothing is running. */
+    private fun teardownCapture() {
         isRunning = false
         handler.removeCallbacks(captureRunnable)
-        virtualDisplay?.release()
-        mediaProjection?.stop()
-        imageReader?.close()
+        virtualDisplay?.release(); virtualDisplay = null
+        mediaProjection?.stop(); mediaProjection = null
+        imageReader?.close(); imageReader = null
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        teardownCapture()
         cardDetector.close()
     }
 }

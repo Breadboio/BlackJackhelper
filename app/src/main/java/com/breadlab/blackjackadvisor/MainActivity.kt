@@ -124,6 +124,9 @@ class MainActivity : AppCompatActivity() {
                 if (granted) {
                     // Android 14: consent is single-use — consume it NOW, never cache.
                     ScreenCaptureService.start(this, resultCode, data!!)
+                } else {
+                    // Denied/revoked — stop any prior capture so UI and state stay consistent.
+                    ScreenCaptureService.stop(this)
                 }
                 updateScreenCaptureStatus(granted)
             }
