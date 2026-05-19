@@ -5,7 +5,12 @@ import org.junit.Test
 
 class BankrollTest {
     @Test fun belowOne_floorsToOne() = assertEquals(1.0, Bankroll.recommendedBet(50.0), 0.0)
-    @Test fun under5_roundsToWhole() = assertEquals(3.0, Bankroll.recommendedBet(250.0), 0.0)
+    @Test fun under5_roundsToWhole() = assertEquals(3.0, Bankroll.recommendedBet(270.0), 0.0)
+    // kotlin.math.round rounds ties to the even integer (round(2.5)==2.0).
+    // This preserves the original FloatingOverlayService behavior verbatim;
+    // pinned here so the quirk stays intentional and visible.
+    @Test fun under5_halfRoundsToEven_preservesOriginalBehavior() =
+        assertEquals(2.0, Bankroll.recommendedBet(250.0), 0.0)
     @Test fun under25_step5() = assertEquals(10.0, Bankroll.recommendedBet(1000.0), 0.0)
     @Test fun under100_step10() = assertEquals(50.0, Bankroll.recommendedBet(5000.0), 0.0)
     @Test fun under1000_step25() = assertEquals(250.0, Bankroll.recommendedBet(25000.0), 0.0)
