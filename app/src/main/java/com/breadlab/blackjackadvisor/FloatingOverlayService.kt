@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
-import android.os.Build
 import android.os.IBinder
 import android.view.*
 import android.widget.*
@@ -368,9 +367,8 @@ class FloatingOverlayService : Service() {
         }
     }
 
-    private fun updateCollapsedView(result: BlackjackStrategy.StrategyResult? = null) {
-        overlayView.findViewById<TextView>(R.id.fab_label)?.text =
-            result?.action?.emoji ?: "🃏"
+    private fun updateCollapsedView() {
+        overlayView.findViewById<TextView>(R.id.fab_label)?.text = "🃏"
     }
 
     private fun createNotificationChannel() {

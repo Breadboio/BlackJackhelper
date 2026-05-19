@@ -50,6 +50,8 @@ class BlackjackStrategyTest {
     @Test fun b7_hard16_vs9_surrenders() = assertEquals(Action.SURRENDER, act(listOf(10, 6), 9))
     @Test fun hard16_vs10_surrenders() = assertEquals(Action.SURRENDER, act(listOf(10, 6), 10))
     @Test fun hard16_vs7_hits() = assertEquals(Action.HIT, act(listOf(10, 6), 7))
+    @Test fun hard15_vs9_hits() = assertEquals(Action.HIT, act(listOf(10, 5), 9))
+    @Test fun hard16_vs8_hits() = assertEquals(Action.HIT, act(listOf(10, 6), 8))
     @Test fun hard15_vs10_surrenders() = assertEquals(Action.SURRENDER, act(listOf(10, 5), 10))
     @Test fun hard15_vsAce_hits() = assertEquals(Action.HIT, act(listOf(10, 5), 1))
 
