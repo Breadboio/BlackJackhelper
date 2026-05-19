@@ -1,12 +1,15 @@
 package com.breadlab.blackjackadvisor
 
 /**
- * Complete Basic Strategy Engine
- * Based on standard Las Vegas Strip rules:
- *   - Dealer stands on soft 17
- *   - Double after split allowed
+ * Complete Basic Strategy Engine — Las Vegas Strip rules:
+ *   - Dealer STANDS on soft 17 (S17)
+ *   - Double after split allowed (DAS)
+ *   - Late surrender allowed
  *   - Re-split aces not allowed
- *   - Surrender allowed
+ *
+ * Standard total-dependent basic strategy (no composition-dependent plays).
+ * Dealer Ace arrives as value 1 (OCR + manual buttons) and is normalized to
+ * 11 once, at the single entry point. See the design spec for the bug history.
  */
 object BlackjackStrategy {
 
@@ -18,7 +21,7 @@ object BlackjackStrategy {
         SURRENDER("SURRENDER", "🏳️", "#95A5A6"),
         DOUBLE_OR_HIT("DOUBLE / HIT", "💰", "#E67E22"),
         DOUBLE_OR_STAND("DOUBLE / STAND", "💰", "#E67E22"),
-        SPLIT_OR_HIT("SPLIT / HIT", "✂️", "#8E44AD"),
+        INCOMPLETE("WAITING", "🃏", "#1A1A2E"),
     }
 
     data class StrategyResult(
@@ -31,154 +34,156 @@ object BlackjackStrategy {
     )
 
     /**
-     * Get the best move given player cards and dealer upcard
-     * @param playerCards list of card values (1=Ace, 2-9, 10=Ten/Face)
-     * @param dealerUpcard dealer's visible card value (1-10)
+     * @param playerCards card values (1=Ace, 2-9, 10=Ten/Face)
+     * @param dealerUpcard dealer's visible card (1=Ace, 2-10)
      */
     fun getAdvice(playerCards: List<Int>, dealerUpcard: Int): StrategyResult {
-        val normalized = playerCards.map { if (it == 1) 11 else it }
+        if (playerCards.size < 2 || dealerUpcard <= 0) {
+            return StrategyResult(
+                Action.INCOMPLETE, "Enter your cards and the dealer's upcard",
+                0, dealerUpcard, false, false
+            )
+        }
 
-        // Check for pair
-        if (playerCards.size == 2 && playerCards[0] == playerCards[1]) {
+        // B1: normalize dealer Ace 1 -> 11 once, here. All thresholds below
+        // are written for Ace == 11.
+        val dealer = if (dealerUpcard == 1) 11 else dealerUpcard
+        val twoCards = playerCards.size == 2
+
+        if (twoCards && playerCards[0] == playerCards[1]) {
             val pairValue = if (playerCards[0] == 1) 11 else playerCards[0]
-            val splitAction = getPairStrategy(pairValue, dealerUpcard)
-            if (splitAction != null) return splitAction
+            val pair = getPairStrategy(pairValue, dealer)
+            if (pair != null) return legalize(pair, twoCards)
         }
 
-        // Check for soft hand (has an ace counted as 11)
         val (total, isSoft) = calculateHand(playerCards)
+        val raw = if (isSoft) getSoftStrategy(total, dealer) else getHardStrategy(total, dealer)
+        return legalize(raw, twoCards)
+    }
 
-        return if (isSoft) {
-            getSoftStrategy(total, dealerUpcard)
-        } else {
-            getHardStrategy(total, dealerUpcard)
+    /**
+     * B13/B14: DOUBLE and SURRENDER are only legal on the initial two cards.
+     * On 3+ card hands collapse to the standard fallback. SPLIT only ever
+     * comes from the 2-card pair path, so it needs no gate.
+     */
+    private fun legalize(r: StrategyResult, twoCards: Boolean): StrategyResult {
+        if (twoCards) return r
+        val collapsed = when (r.action) {
+            Action.DOUBLE, Action.DOUBLE_OR_HIT -> Action.HIT
+            Action.DOUBLE_OR_STAND -> Action.STAND
+            Action.SURRENDER -> Action.HIT
+            else -> return r
         }
+        return r.copy(
+            action = collapsed,
+            reason = r.reason + " — (3+ cards: can't double/surrender, fallback shown)"
+        )
     }
 
     private fun calculateHand(cards: List<Int>): Pair<Int, Boolean> {
         var total = 0
         var aces = 0
         for (card in cards) {
-            if (card == 1) {
-                aces++
-                total += 11
-            } else {
-                total += minOf(card, 10)
-            }
+            if (card == 1) { aces++; total += 11 } else total += minOf(card, 10)
         }
-        var isSoft = aces > 0 && total <= 21
-        while (total > 21 && aces > 0) {
-            total -= 10
-            aces--
-        }
-        if (aces == 0) isSoft = false
+        while (total > 21 && aces > 0) { total -= 10; aces-- }
+        val isSoft = aces > 0 && total <= 21   // an ace still valued 11 => soft
         return Pair(total, isSoft)
     }
 
     private fun getPairStrategy(pairValue: Int, dealer: Int): StrategyResult? {
         val action = when (pairValue) {
-            11 -> Action.SPLIT  // Always split aces
-            10 -> null          // Never split tens (stand)
-            9 -> if (dealer in listOf(7, 10, 11)) null else Action.SPLIT
-            8 -> Action.SPLIT   // Always split 8s
-            7 -> if (dealer <= 7) Action.SPLIT else null
-            6 -> if (dealer <= 6) Action.SPLIT else null
-            5 -> null           // Never split 5s (treat as 10, double)
-            4 -> if (dealer in 5..6) Action.SPLIT else null
-            3 -> if (dealer <= 7) Action.SPLIT else null
-            2 -> if (dealer <= 7) Action.SPLIT else null
+            11 -> Action.SPLIT                                   // A,A always
+            10 -> null                                           // never (stand 20)
+            9  -> if (dealer == 7 || dealer == 10 || dealer == 11) null else Action.SPLIT
+            8  -> Action.SPLIT                                    // always; never surrender 8,8
+            7  -> if (dealer in 2..7) Action.SPLIT else null
+            6  -> if (dealer in 2..6) Action.SPLIT else null      // DAS includes 2
+            5  -> null                                           // play as hard 10
+            4  -> if (dealer in 5..6) Action.SPLIT else null      // DAS only
+            3  -> if (dealer in 2..7) Action.SPLIT else null      // DAS
+            2  -> if (dealer in 2..7) Action.SPLIT else null      // DAS
             else -> null
         } ?: return null
 
         val reason = when (pairValue) {
-            11 -> "Always split Aces — gives two strong starting hands"
-            8 -> "Always split 8s — 16 is the worst hand, two 8s are much better"
-            10 -> "Never split 10s — 20 is already an excellent hand"
-            9 -> "Split 9s unless dealer shows 7, 10, or Ace"
-            7 -> "Split 7s against dealer ${dealer} or less"
-            6 -> "Split 6s against weak dealer (2-6)"
-            5 -> "Treat as 10 — double or hit, don't split"
-            4 -> "Split 4s only against dealer 5 or 6 (weakest upcards)"
-            else -> "Split ${pairValue}s against dealer ${dealer}"
+            11 -> "Always split Aces"
+            8  -> "Always split 8s (never surrender 8,8)"
+            9  -> "Split 9s except vs 7, 10, or Ace (then stand 18)"
+            7  -> "Split 7s vs dealer 2-7"
+            6  -> "Split 6s vs dealer 2-6 (DAS)"
+            4  -> "Split 4s only vs dealer 5-6 (DAS)"
+            3  -> "Split 3s vs dealer 2-7 (DAS)"
+            2  -> "Split 2s vs dealer 2-7 (DAS)"
+            else -> "Split ${pairValue}s"
         }
-
         return StrategyResult(action, reason, pairValue * 2, dealer, false, true)
     }
 
     private fun getSoftStrategy(total: Int, dealer: Int): StrategyResult {
-        val (action, reason) = when (total) {
-            20 -> Pair(Action.STAND, "Soft 20 (A-9) — always stand, near perfect hand")
-            19 -> if (dealer == 6) {
-                Pair(Action.DOUBLE_OR_STAND, "Soft 19 vs dealer 6 — double if allowed, else stand")
-            } else {
-                Pair(Action.STAND, "Soft 19 (A-8) — stand, strong hand")
+        val (action, reason) = when {
+            total >= 20 -> Action.STAND to "Soft $total — stand"                       // B2 (20 & 21)
+            total == 19 -> Action.STAND to "Soft 19 — stand (S17: no double vs 6)"      // B4
+            total == 18 -> when (dealer) {
+                in 3..6 -> Action.DOUBLE_OR_STAND to "Soft 18 vs $dealer — double, else stand"
+                2, 7, 8 -> Action.STAND to "Soft 18 vs $dealer — stand"                 // B5
+                else    -> Action.HIT to "Soft 18 vs $dealer — hit"                     // 9,10,A
             }
-            18 -> when (dealer) {
-                in 2..6 -> Pair(Action.DOUBLE_OR_STAND, "Soft 18 vs weak dealer — double down to maximize profit")
-                7, 8 -> Pair(Action.STAND, "Soft 18 vs ${dealer} — stand, you're likely ahead")
-                else -> Pair(Action.HIT, "Soft 18 vs strong dealer — hit to improve")
+            total == 17 -> when (dealer) {
+                in 3..6 -> Action.DOUBLE_OR_HIT to "Soft 17 vs $dealer — double, else hit"
+                else    -> Action.HIT to "Soft 17 — hit"
             }
-            17 -> when (dealer) {
-                in 3..6 -> Pair(Action.DOUBLE_OR_HIT, "Soft 17 vs weak dealer — double if allowed")
-                else -> Pair(Action.HIT, "Soft 17 — always improve, can't bust with one hit")
+            total == 16 -> when (dealer) {
+                in 4..6 -> Action.DOUBLE_OR_HIT to "Soft 16 vs $dealer — double, else hit"
+                else    -> Action.HIT to "Soft 16 — hit"
             }
-            16 -> when (dealer) {
-                in 4..6 -> Pair(Action.DOUBLE_OR_HIT, "Soft 16 vs weak dealer — double if allowed")
-                else -> Pair(Action.HIT, "Soft 16 — hit, not a strong enough hand to stand")
+            total == 15 -> when (dealer) {
+                in 4..6 -> Action.DOUBLE_OR_HIT to "Soft 15 vs $dealer — double, else hit"
+                else    -> Action.HIT to "Soft 15 — hit"
             }
-            15 -> when (dealer) {
-                in 4..6 -> Pair(Action.DOUBLE_OR_HIT, "Soft 15 vs weak dealer — double if allowed")
-                else -> Pair(Action.HIT, "Soft 15 — hit")
+            total == 14 -> when (dealer) {
+                5, 6 -> Action.DOUBLE_OR_HIT to "Soft 14 vs $dealer — double, else hit"
+                else -> Action.HIT to "Soft 14 — hit"
             }
-            14 -> when (dealer) {
-                5, 6 -> Pair(Action.DOUBLE_OR_HIT, "Soft 14 vs dealer 5/6 — double if allowed")
-                else -> Pair(Action.HIT, "Soft 14 — hit")
+            total == 13 -> when (dealer) {
+                5, 6 -> Action.DOUBLE_OR_HIT to "Soft 13 vs $dealer — double, else hit"
+                else -> Action.HIT to "Soft 13 — hit"
             }
-            13 -> when (dealer) {
-                5, 6 -> Pair(Action.DOUBLE_OR_HIT, "Soft 13 vs dealer 5/6 — double if allowed")
-                else -> Pair(Action.HIT, "Soft 13 — hit")
-            }
-            else -> Pair(Action.HIT, "Soft hand — hit")
+            else -> Action.HIT to "Soft hand — hit"
         }
         return StrategyResult(action, reason, total, dealer, true, false)
     }
 
     private fun getHardStrategy(total: Int, dealer: Int): StrategyResult {
         val (action, reason) = when {
-            total >= 17 -> Pair(Action.STAND, "Hard ${total} — always stand at 17+")
+            total >= 17 -> Action.STAND to "Hard $total — always stand at 17+"
             total == 16 -> when (dealer) {
-                in 2..6 -> Pair(Action.STAND, "Hard 16 vs weak dealer — dealer likely to bust")
-                10 -> Pair(Action.SURRENDER, "Hard 16 vs dealer 10 — surrender to save half your bet")
-                11 -> Pair(Action.SURRENDER, "Hard 16 vs Ace — surrender (or hit if surrender unavailable)")
-                else -> Pair(Action.HIT, "Hard 16 vs ${dealer} — hit, dealer too strong to stand")
+                in 2..6   -> Action.STAND to "Hard 16 vs $dealer — stand, dealer likely busts"
+                9, 10, 11 -> Action.SURRENDER to "Hard 16 vs $dealer — surrender (else hit)"   // B7 + B1
+                else      -> Action.HIT to "Hard 16 vs $dealer — hit"                          // 7,8
             }
             total == 15 -> when (dealer) {
-                in 2..6 -> Pair(Action.STAND, "Hard 15 vs weak dealer — stand, let dealer bust")
-                10 -> Pair(Action.SURRENDER, "Hard 15 vs dealer 10 — surrender saves money long-term")
-                else -> Pair(Action.HIT, "Hard 15 vs ${dealer} — hit")
+                in 2..6 -> Action.STAND to "Hard 15 vs $dealer — stand"
+                10      -> Action.SURRENDER to "Hard 15 vs 10 — surrender (else hit)"
+                else    -> Action.HIT to "Hard 15 vs $dealer — hit"
             }
-            total in 13..14 -> if (dealer <= 6) {
-                Pair(Action.STAND, "Hard ${total} vs weak dealer (${dealer}) — stand, dealer likely busts")
-            } else {
-                Pair(Action.HIT, "Hard ${total} vs ${dealer} — hit, dealer too strong")
-            }
+            total in 13..14 ->
+                if (dealer in 2..6) Action.STAND to "Hard $total vs $dealer — stand, dealer likely busts"
+                else Action.HIT to "Hard $total vs $dealer — hit"                              // B1: vs A hits
             total == 12 -> when (dealer) {
-                in 4..6 -> Pair(Action.STAND, "Hard 12 vs weak dealer 4-6 — stand, high bust risk for dealer")
-                else -> Pair(Action.HIT, "Hard 12 vs ${dealer} — hit")
+                in 4..6 -> Action.STAND to "Hard 12 vs $dealer — stand"
+                else    -> Action.HIT to "Hard 12 vs $dealer — hit"
             }
-            total == 11 -> Pair(Action.DOUBLE, "Hard 11 — almost always double down, great position")
-            total == 10 -> if (dealer <= 9) {
-                Pair(Action.DOUBLE, "Hard 10 vs ${dealer} — double down, you have the edge")
-            } else {
-                Pair(Action.HIT, "Hard 10 vs ${dealer} — hit (dealer too strong to double)")
-            }
-            total == 9 -> if (dealer in 3..6) {
-                Pair(Action.DOUBLE, "Hard 9 vs weak dealer — double down")
-            } else {
-                Pair(Action.HIT, "Hard 9 — hit")
-            }
-            total <= 8 -> Pair(Action.HIT, "Hard ${total} — always hit, can't bust")
-            else -> Pair(Action.HIT, "Hit")
+            total == 11 ->
+                if (dealer == 11) Action.HIT to "Hard 11 vs Ace — hit (S17)"                   // B26
+                else Action.DOUBLE to "Hard 11 — double down"
+            total == 10 ->
+                if (dealer in 2..9) Action.DOUBLE to "Hard 10 vs $dealer — double down"
+                else Action.HIT to "Hard 10 vs $dealer — hit"                                  // B1: vs 10/A
+            total == 9 ->
+                if (dealer in 3..6) Action.DOUBLE to "Hard 9 vs $dealer — double down"
+                else Action.HIT to "Hard 9 — hit"
+            else -> Action.HIT to "Hard $total — hit, can't bust"                              // <= 8
         }
         return StrategyResult(action, reason, total, dealer, false, false)
     }
@@ -190,10 +195,5 @@ object BlackjackStrategy {
         12 -> "Q"
         13 -> "K"
         else -> value.toString()
-    }
-
-    fun normalizeCard(value: Int): Int = when (value) {
-        11, 12, 13 -> 10  // J, Q, K = 10
-        else -> value
     }
 }
