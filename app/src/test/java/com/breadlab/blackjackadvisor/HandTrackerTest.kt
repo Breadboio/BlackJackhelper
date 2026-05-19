@@ -53,6 +53,52 @@ class HandTrackerTest {
         assertEquals(listOf(4), t.playerCards)
     }
 
+    @Test fun pendingAmbiguityNotReRaisedWhilePending() {
+        val t = tracker()
+        t.onFrame(listOf(4), 7)
+        val raised = t.onFrame(listOf(1), 7)
+        assertEquals(4 to 1, raised.ambiguity!!.let { it.stored to it.detectedAlt })
+        val again = t.onFrame(listOf(1), 7)
+        assertNull(again.ambiguity)
+        assertEquals(4, t.currentAmbiguity()!!.stored)
+    }
+
+    @Test fun resolveAmbiguityRewritesCardInPlace() {
+        val t = tracker()
+        t.onFrame(listOf(10, 4), 7)
+        t.onFrame(listOf(10, 1), 7)
+        assertEquals(4 to 1, t.currentAmbiguity()!!.let { it.stored to it.detectedAlt })
+        t.resolveAmbiguity(1)
+        assertEquals(listOf(10, 1), t.playerCards)
+    }
+
+    @Test fun newHandCommitClearsPendingAmbiguity() {
+        val t = tracker()
+        t.onFrame(listOf(4), 7)
+        t.onFrame(listOf(1), 7)
+        assertEquals(4, t.currentAmbiguity()!!.stored)
+        t.onFrame(listOf(9, 2), 5)
+        val commit = t.onFrame(listOf(9, 2), 5)
+        assertTrue(commit.newHand)
+        assertTrue(commit.ambiguityCleared)
+        assertNull(t.currentAmbiguity())
+        assertEquals(listOf(9, 2), t.playerCards)
+        assertEquals(5, t.dealerCard)
+    }
+
+    @Test fun manualOpsBlockedInAutoDetect() {
+        val t = tracker()
+        t.addPlayerCard(10); t.setDealer(9); t.undo()
+        assertTrue(t.playerCards.isEmpty())
+        assertEquals(0, t.dealerCard)
+    }
+
+    @Test fun addPlayerCardCapsAtEight() {
+        val t = HandTracker()
+        repeat(10) { t.addPlayerCard(2) }
+        assertEquals(8, t.playerCards.size)
+    }
+
     @Test fun manualOpsAndReset() {
         val t = HandTracker()
         t.addPlayerCard(10); t.addPlayerCard(6); t.setDealer(9)

@@ -117,7 +117,10 @@ class HandTracker {
     }
 
     private fun checkAmbiguity(detected: List<Int>): Ambiguity? {
-        if (pendingAmbiguity != null) return pendingAmbiguity
+        // Surface only a NEWLY raised ambiguity. While one is already pending
+        // and unchanged, return null so the Service does not re-render the
+        // prompt every frame (preserves the original no-churn behavior).
+        if (pendingAmbiguity != null) return null
         if (detected.size != playerCards.size || playerCards.isEmpty()) return null
         val stored = playerCards.groupingBy { it }.eachCount()
         val det = detected.groupingBy { it }.eachCount()
