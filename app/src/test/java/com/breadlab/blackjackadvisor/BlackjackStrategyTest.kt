@@ -95,6 +95,51 @@ class BlackjackStrategyTest {
         }
     }
 
+    // ---- Full soft-total sweep (A,2..A,9) over dealer 2..10 and 1==Ace ----
+    @Test fun softTotalTableSweep() {
+        fun n(dealer: Int) = if (dealer == 1) 11 else dealer
+        val expect: Map<Int, (Int) -> Action> = mapOf(
+            2 to { dd -> if (n(dd) in 5..6) Action.DOUBLE_OR_HIT else Action.HIT },          // A,2 soft 13
+            3 to { dd -> if (n(dd) in 5..6) Action.DOUBLE_OR_HIT else Action.HIT },          // A,3 soft 14
+            4 to { dd -> if (n(dd) in 4..6) Action.DOUBLE_OR_HIT else Action.HIT },          // A,4 soft 15
+            5 to { dd -> if (n(dd) in 4..6) Action.DOUBLE_OR_HIT else Action.HIT },          // A,5 soft 16
+            6 to { dd -> if (n(dd) in 3..6) Action.DOUBLE_OR_HIT else Action.HIT },          // A,6 soft 17
+            7 to { dd -> when (n(dd)) {                                                       // A,7 soft 18
+                in 3..6 -> Action.DOUBLE_OR_STAND
+                2, 7, 8 -> Action.STAND
+                else -> Action.HIT
+            } },
+            8 to { _ -> Action.STAND },                                                       // A,8 soft 19
+            9 to { _ -> Action.STAND },                                                       // A,9 soft 20
+        )
+        for ((other, fn) in expect) {
+            for (dd in listOf(2, 3, 4, 5, 6, 7, 8, 9, 10, 1)) {
+                assertEquals("soft A,$other vs $dd", fn(dd), act(listOf(1, other), dd))
+            }
+        }
+    }
+
+    // ---- Full pair sweep over dealer 2..10 and 1==Ace (5,5 covered by hard-10 sweep) ----
+    @Test fun pairTableSweep() {
+        fun n(dealer: Int) = if (dealer == 1) 11 else dealer
+        val expect: Map<Int, (Int) -> Action> = mapOf(
+            2  to { dd -> if (n(dd) in 2..7) Action.SPLIT else Action.HIT },                  // 2,2
+            3  to { dd -> if (n(dd) in 2..7) Action.SPLIT else Action.HIT },                  // 3,3
+            4  to { dd -> if (n(dd) in 5..6) Action.SPLIT else Action.HIT },                  // 4,4 (else hard 8)
+            6  to { dd -> if (n(dd) in 2..6) Action.SPLIT else Action.HIT },                  // 6,6 (else hard 12)
+            7  to { dd -> if (n(dd) in 2..7) Action.SPLIT else Action.HIT },                  // 7,7 (else hard 14)
+            8  to { _ -> Action.SPLIT },                                                      // 8,8 always
+            9  to { dd -> if (n(dd) == 7 || n(dd) == 10 || n(dd) == 11) Action.STAND else Action.SPLIT }, // 9,9
+            10 to { _ -> Action.STAND },                                                      // 10,10 never split
+            1  to { _ -> Action.SPLIT },                                                      // A,A always
+        )
+        for ((card, fn) in expect) {
+            for (dd in listOf(2, 3, 4, 5, 6, 7, 8, 9, 10, 1)) {
+                assertEquals("pair $card,$card vs $dd", fn(dd), act(listOf(card, card), dd))
+            }
+        }
+    }
+
     // helpers ---------------------------------------------------------------
     private fun dealerCards() = listOf(2, 3, 4, 5, 6, 7, 8, 9, 10, 1) // 1 == Ace
     private fun allBut(a: Action): Map<Int, Action> = dealerCards().associateWith { a }
