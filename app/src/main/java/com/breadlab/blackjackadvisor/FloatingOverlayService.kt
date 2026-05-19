@@ -479,30 +479,8 @@ class FloatingOverlayService : Service() {
             return
         }
         bankrollSection.visibility = View.VISIBLE
-        balanceText?.text = "💰 Balance: ${formatMoney(balance)}"
-        betText?.text = "🎯 Suggested bet: ${formatMoney(recommendedBet(balance))}"
-    }
-
-    /** 1% of bankroll, rounded to a clean step (1, 5, 10, 25, 100…) for nicer display. */
-    private fun recommendedBet(balance: Double): Double {
-        val raw = balance * 0.01
-        return when {
-            raw < 1.0    -> 1.0
-            raw < 5.0    -> kotlin.math.round(raw)
-            raw < 25.0   -> (kotlin.math.round(raw / 5.0) * 5.0).coerceAtLeast(5.0)
-            raw < 100.0  -> (kotlin.math.round(raw / 10.0) * 10.0).coerceAtLeast(10.0)
-            raw < 1000.0 -> (kotlin.math.round(raw / 25.0) * 25.0).coerceAtLeast(25.0)
-            else         -> (kotlin.math.round(raw / 100.0) * 100.0).coerceAtLeast(100.0)
-        }
-    }
-
-    private fun formatMoney(amount: Double): String {
-        // Whole numbers get no decimals; fractional gets 2.
-        return if (amount % 1.0 == 0.0) {
-            String.format("%,.0f", amount)
-        } else {
-            String.format("%,.2f", amount)
-        }
+        balanceText?.text = "💰 Balance: ${Bankroll.formatMoney(balance)}"
+        betText?.text = "🎯 Suggested bet: ${Bankroll.formatMoney(Bankroll.recommendedBet(balance))}"
     }
 
     private fun updateAdvice() {
